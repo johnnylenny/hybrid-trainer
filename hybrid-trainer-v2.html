@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<!--
+  HYBRID TRAINER v0.2
+  Single-file web app. Open in any browser. Data saves to localStorage.
+
+  What changed from v1:
+    - Flow is now: Log (free-form) / Templates (saved exercise lists) / History
+    - Session metadata: date, start/end time, bodyweight
+    - Per-set types: warmup, working, myo-rep, drop set
+    - Per-exercise notes + session notes
+    - Exercise name memory (autocomplete from your own past sessions)
+    - Auto-fills last session's numbers as grayed-out targets to beat
+
+  How to read this file:
+    1. <style>   - all the CSS
+    2. <body>    - HTML structure
+    3. <script>  - logic, broken into clearly commented sections:
+                    STATE, SAVE/LOAD, NAV, SESSION LOGIC, TEMPLATE LOGIC,
+                    HISTORY, EXERCISE MEMORY, UTIL
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hybrid Trainer v0.2</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #262a33;
+    --text: #e6e8ec;
+    --muted: #8a8f98;
+    --dim: #5a5f68;
+    --accent: #ffb547;
+    --accent-2: #64a8e6;
+    --danger: #ff6b6b;
+    --good: #7cd992;
+    --warmup: #2a2d35;
+  }
+  body {
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+    min-height: 100vh;
+    padding: 12px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.3rem; letter-spacing: 0.05em; }
+  h2 { font-size: 0.95rem; color: var(--accent); margin: 14px 0 8px; letter-spacing: 0.05em; text-transform: uppercase; }
+  h3 { font-size: 0.95rem; margin: 10px 0 6px; color: var(--text); }
+  h4 { font-size: 0.85rem; margin: 8px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  p, label, span, div, button, input, select, textarea { font-size: 0.88rem; }
+  .muted { color: var(--muted); font-size: 0.78rem; }
+  .dim { color: var(--dim); }
+
+  nav {
+    display: flex;
+    gap: 2px;
+    margin: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 10px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border-bottom: 2px solid transparent;
+    flex: 1;
+  }
+  nav button.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .screen { display: none; }
+  .screen.active { display: block; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 12px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+  }
+
+  input, select, textarea {
+    font-family: inherit;
+    font-size: 0.88rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 3px;
+    width: 100%;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  /* placeholder = grayed out target-to-beat from last session */
+  input::placeholder { color: var(--dim); font-style: italic; }
+
+  label { display: block; margin-bottom: 3px; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .field { margin-bottom: 8px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .row .field { flex: 1; min-width: 90px; }
+
+  button.btn {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    padding: 9px 14px;
+    cursor: pointer;
+    font-weight: 600;
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  button.btn-secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 7px 12px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 0.82rem;
+  }
+  button.btn-secondary:hover { border-color: var(--accent); }
+  button.btn-danger {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    padding: 5px 9px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    font-family: inherit;
+  }
+  button.btn-small {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 5px 9px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    font-family: inherit;
+  }
+  button.btn-small:hover { border-color: var(--accent); }
+  button:hover { opacity: 0.92; }
+
+  .exercise-block {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: var(--panel-2);
+  }
+  .exercise-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .exercise-name-input {
+    font-size: 0.95rem;
+    font-weight: 600;
+    flex: 1;
+  }
+
+  /* Set rows */
+  .set-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-bottom: 4px;
+    padding: 4px;
+    border-radius: 3px;
+    flex-wrap: wrap;
+  }
+  .set-row .set-label {
+    min-width: 28px;
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .set-row input {
+    padding: 5px 7px;
+    font-size: 0.82rem;
+  }
+  .set-row .w-input { max-width: 70px; }
+  .set-row .r-input { max-width: 55px; }
+  .set-row .rpe-input { max-width: 50px; }
+  .set-row .seq-input { flex: 1; min-width: 120px; }
+
+  .set-row.warmup {
+    background: var(--warmup);
+    opacity: 0.75;
+  }
+  .set-row.warmup input { font-size: 0.78rem; opacity: 0.85; }
+  .set-row.warmup .set-label { color: var(--dim); }
+
+  .set-row.myorep { background: rgba(255, 181, 71, 0.08); border-left: 2px solid var(--accent); padding-left: 6px; }
+  .set-row.drop { background: rgba(100, 168, 230, 0.08); border-left: 2px solid var(--accent-2); padding-left: 6px; }
+
+  .add-set-buttons { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+
+  .last-session-hint {
+    font-size: 0.7rem;
+    color: var(--dim);
+    padding: 2px 6px;
+    margin-bottom: 4px;
+    font-style: italic;
+  }
+
+  .session-card {
+    border-left: 3px solid var(--border);
+    padding: 10px;
+    margin-bottom: 8px;
+    background: var(--panel);
+    border-radius: 3px;
+  }
+  .session-card.lifts { border-left-color: var(--accent); }
+  .session-card.run { border-left-color: var(--good); }
+  .session-card.conditioning { border-left-color: var(--accent-2); }
+
+  .tag {
+    display: inline-block;
+    background: var(--border);
+    color: var(--text);
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-left: 4px;
+  }
+
+  .header-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 6px; }
+
+  pre { white-space: pre-wrap; font-size: 0.78rem; color: var(--muted); font-family: inherit; }
+
+  /* autocomplete dropdown */
+  .autocomplete { position: relative; flex: 1; }
+  .autocomplete-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-top: none;
+    z-index: 10;
+    max-height: 160px;
+    overflow-y: auto;
+    border-radius: 0 0 3px 3px;
+  }
+  .autocomplete-item {
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .autocomplete-item:hover, .autocomplete-item.selected { background: var(--panel-2); color: var(--accent); }
+
+  @media (max-width: 600px) {
+    body { padding: 8px; }
+    .row { flex-direction: column; }
+    h1 { font-size: 1.1rem; }
+    nav button { font-size: 0.72rem; padding: 8px 6px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="header-row">
+  <div>
+    <h1>HYBRID TRAINER</h1>
+    <p class="muted">v0.2 • data saved in this browser</p>
+  </div>
+  <div>
+    <button class="btn-small" onclick="exportData()">Export</button>
+    <button class="btn-small" onclick="importData()">Import</button>
+  </div>
+</header>
+
+<nav>
+  <button data-screen="log" class="active">Log</button>
+  <button data-screen="templates">Templates</button>
+  <button data-screen="history">History</button>
+</nav>
+
+<!-- ========== LOG SCREEN ========== -->
+<section id="screen-log" class="screen active">
+  <div class="panel">
+    <div class="row">
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="session-date">
+      </div>
+      <div class="field">
+        <label>Bodyweight</label>
+        <input type="number" step="0.01" id="session-bw" placeholder="e.g. 205.25">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Start time</label>
+        <input type="time" id="session-start">
+        <button class="btn-small" onclick="setNow('session-start')" style="margin-top:4px">Now</button>
+      </div>
+      <div class="field">
+        <label>End time</label>
+        <input type="time" id="session-end">
+        <button class="btn-small" onclick="setNow('session-end')" style="margin-top:4px">Now</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Session type</label>
+        <select id="session-type" onchange="onSessionTypeChange()">
+          <option value="lifts">Lifts</option>
+          <option value="run">Run</option>
+          <option value="conditioning">Conditioning</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Phase (optional)</label>
+        <input type="text" id="session-phase" placeholder="e.g. Hypertrophy, Strength">
+      </div>
+      <div class="field">
+        <label>Session name</label>
+        <input type="text" id="session-name" placeholder="e.g. BACK, LEGS">
+      </div>
+    </div>
+    <div class="field">
+      <label>Load from template</label>
+      <select id="template-picker" onchange="loadTemplateIntoSession()">
+        <option value="">— none —</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="exercises-area"></div>
+
+  <div class="field">
+    <label>Session notes</label>
+    <textarea id="session-notes" placeholder="e.g. 'Really not into it today'"></textarea>
+  </div>
+
+  <div class="row">
+    <button class="btn" onclick="saveSessionToHistory()">Save Session</button>
+    <button class="btn-secondary" onclick="saveCurrentAsTemplate()">Save as Template</button>
+    <button class="btn-secondary" onclick="clearSession()">Clear</button>
+  </div>
+</section>
+
+<!-- ========== TEMPLATES SCREEN ========== -->
+<section id="screen-templates" class="screen">
+  <h2>Saved Templates</h2>
+  <p class="muted">Templates are just exercise lists you can load into a session.</p>
+  <div id="templates-list"></div>
+</section>
+
+<!-- ========== HISTORY SCREEN ========== -->
+<section id="screen-history" class="screen">
+  <h2>History</h2>
+  <div class="field">
+    <label>Filter by phase</label>
+    <select id="history-filter" onchange="renderHistory()">
+      <option value="">all</option>
+    </select>
+  </div>
+  <div id="history-list"></div>
+</section>
+
+<script>
+// =====================================================================
+// STATE
+// Three things live in state:
+//   plan.templates  - saved exercise lists for quick reuse
+//   history         - completed sessions
+//   currentSession  - the session being built right now on the Log tab
+// =====================================================================
+let state = {
+  templates: [],    // [{ name, type, exercises: [...] }]
+  history: [],      // [{ date, startTime, endTime, bodyweight, name, phase, type, exercises, runData, condData, notes }]
+  currentSession: null
+};
+
+function emptySession() {
+  return {
+    date: new Date().toISOString().slice(0, 10),
+    startTime: '',
+    endTime: '',
+    bodyweight: '',
+    name: '',
+    phase: '',
+    type: 'lifts',
+    exercises: [],      // for type=lifts
+    runData: {},        // for type=run
+    condData: {},       // for type=conditioning
+    notes: ''
+  };
+}
+
+function emptyExercise(name = '') {
+  return {
+    name,
+    sets: [],           // [{ type: 'warmup'|'working'|'myorep'|'drop', ...fields }]
+    notes: ''
+  };
+}
+
+function loadState() {
+  const saved = localStorage.getItem('hybridTrainerV2');
+  if (saved) {
+    try { state = JSON.parse(saved); }
+    catch (e) { console.warn('Parse failed, starting fresh'); }
+  }
+  if (!state.currentSession) state.currentSession = emptySession();
+  if (!state.templates) state.templates = [];
+  if (!state.history) state.history = [];
+}
+
+function saveState() {
+  localStorage.setItem('hybridTrainerV2', JSON.stringify(state));
+}
+
+// =====================================================================
+// NAV
+// =====================================================================
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('screen-' + btn.dataset.screen).classList.add('active');
+    if (btn.dataset.screen === 'log') renderLog();
+    if (btn.dataset.screen === 'templates') renderTemplates();
+    if (btn.dataset.screen === 'history') renderHistory();
+  });
+});
+
+// =====================================================================
+// LOG SCREEN
+// The Log screen is always editing state.currentSession.
+// Every change calls syncSessionFromForm() so we don't lose data.
+// =====================================================================
+
+function renderLog() {
+  const s = state.currentSession;
+  document.getElementById('session-date').value = s.date;
+  document.getElementById('session-bw').value = s.bodyweight || '';
+  document.getElementById('session-start').value = s.startTime || '';
+  document.getElementById('session-end').value = s.endTime || '';
+  document.getElementById('session-type').value = s.type;
+  document.getElementById('session-phase').value = s.phase || '';
+  document.getElementById('session-name').value = s.name || '';
+  document.getElementById('session-notes').value = s.notes || '';
+
+  // fill template picker
+  const picker = document.getElementById('template-picker');
+  picker.innerHTML = '<option value="">— none —</option>' +
+    state.templates.map((t, i) => `<option value="${i}">${escapeHtml(t.name)}</option>`).join('');
+
+  onSessionTypeChange();
+
+  // wire up basic field listeners (only once)
+  if (!renderLog._wired) {
+    ['session-date','session-bw','session-start','session-end','session-phase','session-name','session-notes']
+      .forEach(id => document.getElementById(id).addEventListener('input', syncSessionFromForm));
+    renderLog._wired = true;
+  }
+}
+
+function syncSessionFromForm() {
+  const s = state.currentSession;
+  s.date = document.getElementById('session-date').value;
+  s.bodyweight = document.getElementById('session-bw').value;
+  s.startTime = document.getElementById('session-start').value;
+  s.endTime = document.getElementById('session-end').value;
+  s.phase = document.getElementById('session-phase').value;
+  s.name = document.getElementById('session-name').value;
+  s.notes = document.getElementById('session-notes').value;
+  saveState();
+}
+
+function onSessionTypeChange() {
+  const type = document.getElementById('session-type').value;
+  state.currentSession.type = type;
+  const area = document.getElementById('exercises-area');
+  if (type === 'lifts') {
+    renderExercises();
+  } else if (type === 'run') {
+    const rd = state.currentSession.runData || {};
+    area.innerHTML = `
+      <div class="panel session-card run">
+        <h3>Run session</h3>
+        <div class="row">
+          <div class="field"><label>Distance</label><input type="text" id="run-distance" placeholder="e.g. 5.2k" value="${escapeHtml(rd.distance||'')}"></div>
+          <div class="field"><label>Time</label><input type="text" id="run-time" placeholder="e.g. 26:15" value="${escapeHtml(rd.time||'')}"></div>
+          <div class="field"><label>Avg pace</label><input type="text" id="run-pace" placeholder="e.g. 5:02/km" value="${escapeHtml(rd.pace||'')}"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Avg HR</label><input type="number" id="run-hr" value="${escapeHtml(rd.hr||'')}"></div>
+          <div class="field"><label>RPE</label><input type="number" id="run-rpe" min="1" max="10" value="${escapeHtml(rd.rpe||'')}"></div>
+        </div>
+      </div>`;
+    ['run-distance','run-time','run-pace','run-hr','run-rpe'].forEach(id =>
+      document.getElementById(id).addEventListener('input', syncRunData));
+  } else if (type === 'conditioning') {
+    const cd = state.currentSession.condData || {};
+    area.innerHTML = `
+      <div class="panel session-card conditioning">
+        <h3>Conditioning session</h3>
+        <div class="row">
+          <div class="field"><label>Modality</label><input type="text" id="cond-modality" placeholder="e.g. Row, Bike, AirDyne" value="${escapeHtml(cd.modality||'')}"></div>
+          <div class="field"><label>Total work</label><input type="text" id="cond-total" placeholder="e.g. 6x500m" value="${escapeHtml(cd.total||'')}"></div>
+          <div class="field"><label>RPE</label><input type="number" id="cond-rpe" min="1" max="10" value="${escapeHtml(cd.rpe||'')}"></div>
+        </div>
+        <div class="field"><label>Splits / details</label><textarea id="cond-splits" placeholder="e.g. 1:45, 1:47, 1:46...">${escapeHtml(cd.splits||'')}</textarea></div>
+      </div>`;
+    ['cond-modality','cond-total','cond-rpe','cond-splits'].forEach(id =>
+      document.getElementById(id).addEventListener('input', syncCondData));
+  }
+  saveState();
+}
+
+function syncRunData() {
+  state.currentSession.runData = {
+    distance: document.getElementById('run-distance').value,
+    time: document.getElementById('run-time').value,
+    pace: document.getElementById('run-pace').value,
+    hr: document.getElementById('run-hr').value,
+    rpe: document.getElementById('run-rpe').value
+  };
+  saveState();
+}
+
+function syncCondData() {
+  state.currentSession.condData = {
+    modality: document.getElementById('cond-modality').value,
+    total: document.getElementById('cond-total').value,
+    rpe: document.getElementById('cond-rpe').value,
+    splits: document.getElementById('cond-splits').value
+  };
+  saveState();
+}
+
+function setNow(id) {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,'0');
+  const mm = String(now.getMinutes()).padStart(2,'0');
+  document.getElementById(id).value = `${hh}:${mm}`;
+  syncSessionFromForm();
+}
+
+// =====================================================================
+// EXERCISES within the current session (lifts only)
+// =====================================================================
+
+function renderExercises() {
+  const area = document.getElementById('exercises-area');
+  const exs = state.currentSession.exercises;
+  area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i)).join('') + `
+    <button class="btn-secondary" onclick="addExercise()">+ Add Exercise</button>
+  `;
+  // set up autocomplete on every exercise name input
+  exs.forEach((_, i) => wireAutocomplete(i));
+}
+
+function renderExerciseBlock(ex, i) {
+  const last = findLastExerciseData(ex.name);
+  const hint = last ? `Last: ${summarizeExerciseText(last)}` : '';
+
+  return `
+    <div class="exercise-block">
+      <div class="exercise-header">
+        <div class="autocomplete" style="flex:1">
+          <input type="text" class="exercise-name-input"
+            id="ex-name-${i}"
+            value="${escapeHtml(ex.name)}"
+            placeholder="Exercise name"
+            autocomplete="off">
+          <div class="autocomplete-list" id="ac-list-${i}" style="display:none"></div>
+        </div>
+        <button class="btn-danger" onclick="removeExercise(${i})">Delete</button>
+      </div>
+      ${hint ? `<div class="last-session-hint">${escapeHtml(hint)}</div>` : ''}
+      <div id="sets-${i}">
+        ${ex.sets.map((set, si) => renderSetRow(i, si, set, last)).join('')}
+      </div>
+      <div class="add-set-buttons">
+        <button class="btn-small" onclick="addSet(${i}, 'warmup')">+ Warmup</button>
+        <button class="btn-small" onclick="addSet(${i}, 'working')">+ Working</button>
+        <button class="btn-small" onclick="addSet(${i}, 'myorep')">+ Myo-rep</button>
+        <button class="btn-small" onclick="addSet(${i}, 'drop')">+ Drop set</button>
+      </div>
+      <div class="field" style="margin-top:8px">
+        <label>Exercise notes</label>
+        <input type="text" value="${escapeHtml(ex.notes||'')}"
+          oninput="updateExerciseNotes(${i}, this.value)"
+          placeholder="e.g. 'felt light, no belt'">
+      </div>
+    </div>`;
+}
+
+function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
+  // compute "target to beat" hints from last session's equivalent set
+  const hint = lastExerciseData && lastExerciseData.sets && lastExerciseData.sets[setIdx];
+  const hintW = hint && hint.type === set.type && hint.weight ? hint.weight : '';
+  const hintR = hint && hint.type === set.type && hint.reps ? hint.reps : '';
+  const hintSeq = hint && hint.type === set.type && hint.sequence ? hint.sequence : '';
+
+  if (set.type === 'warmup') {
+    return `
+      <div class="set-row warmup">
+        <span class="set-label">WU</span>
+        <input type="number" class="w-input" placeholder="${hintW||'wt'}" value="${escapeHtml(set.weight||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
+        <span class="dim">×</span>
+        <input type="text" class="r-input" placeholder="${hintR||'reps'}" value="${escapeHtml(set.reps||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'reps',this.value)">
+        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+      </div>`;
+  }
+  if (set.type === 'working') {
+    const hintRPE = hint && hint.type === 'working' && hint.rpe ? hint.rpe : '';
+    return `
+      <div class="set-row">
+        <span class="set-label">W${countWorkingBefore(exIdx, setIdx)}</span>
+        <input type="number" class="w-input" placeholder="${hintW||'wt'}" value="${escapeHtml(set.weight||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
+        <span class="dim">×</span>
+        <input type="text" class="r-input" placeholder="${hintR||'reps'}" value="${escapeHtml(set.reps||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'reps',this.value)">
+        <input type="number" class="rpe-input" placeholder="${hintRPE||'RPE'}" min="1" max="10" value="${escapeHtml(set.rpe||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'rpe',this.value)">
+        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+      </div>`;
+  }
+  if (set.type === 'myorep') {
+    return `
+      <div class="set-row myorep">
+        <span class="set-label">MYO</span>
+        <input type="number" class="w-input" placeholder="${hintW||'wt'}" value="${escapeHtml(set.weight||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
+        <span class="dim">×</span>
+        <input type="text" class="seq-input" placeholder="${hintSeq||'14, 8, 3, 2'}" value="${escapeHtml(set.sequence||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'sequence',this.value)">
+        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+      </div>`;
+  }
+  if (set.type === 'drop') {
+    return `
+      <div class="set-row drop">
+        <span class="set-label">DROP</span>
+        <input type="text" class="seq-input" placeholder="${hintSeq||'35x8, 25x7, 15x11'}" value="${escapeHtml(set.sequence||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'sequence',this.value)">
+        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+      </div>`;
+  }
+}
+
+function countWorkingBefore(exIdx, setIdx) {
+  const sets = state.currentSession.exercises[exIdx].sets;
+  let n = 0;
+  for (let i = 0; i <= setIdx; i++) if (sets[i].type === 'working') n++;
+  return n;
+}
+
+function addExercise() {
+  state.currentSession.exercises.push(emptyExercise());
+  saveState();
+  renderExercises();
+}
+
+function removeExercise(i) {
+  if (!confirm('Remove this exercise?')) return;
+  state.currentSession.exercises.splice(i, 1);
+  saveState();
+  renderExercises();
+}
+
+function addSet(exIdx, type) {
+  const newSet = { type };
+  if (type === 'warmup' || type === 'working') { newSet.weight = ''; newSet.reps = ''; }
+  if (type === 'working') newSet.rpe = '';
+  if (type === 'myorep') { newSet.weight = ''; newSet.sequence = ''; }
+  if (type === 'drop') newSet.sequence = '';
+  state.currentSession.exercises[exIdx].sets.push(newSet);
+  saveState();
+  renderExercises();
+}
+
+function removeSet(exIdx, setIdx) {
+  state.currentSession.exercises[exIdx].sets.splice(setIdx, 1);
+  saveState();
+  renderExercises();
+}
+
+function updateSet(exIdx, setIdx, field, value) {
+  state.currentSession.exercises[exIdx].sets[setIdx][field] = value;
+  saveState();
+  // note: we don't re-render here or the input would lose focus mid-typing
+}
+
+function updateExerciseNotes(i, v) {
+  state.currentSession.exercises[i].notes = v;
+  saveState();
+}
+
+// =====================================================================
+// AUTOCOMPLETE for exercise names
+// Pull unique names from both templates and history
+// =====================================================================
+function allKnownExerciseNames() {
+  const set = new Set();
+  state.templates.forEach(t => (t.exercises || []).forEach(e => e.name && set.add(e.name)));
+  state.history.forEach(s => (s.exercises || []).forEach(e => e.name && set.add(e.name)));
+  return Array.from(set).sort();
+}
+
+function wireAutocomplete(i) {
+  const input = document.getElementById(`ex-name-${i}`);
+  const list = document.getElementById(`ac-list-${i}`);
+  if (!input) return;
+
+  function updateList() {
+    const q = input.value.trim().toLowerCase();
+    const names = allKnownExerciseNames().filter(n => q && n.toLowerCase().includes(q) && n.toLowerCase() !== q);
+    if (names.length === 0) { list.style.display = 'none'; return; }
+    list.style.display = 'block';
+    list.innerHTML = names.slice(0, 8).map(n => `<div class="autocomplete-item" onmousedown="pickName(${i},'${escapeJs(n)}')">${escapeHtml(n)}</div>`).join('');
+  }
+
+  input.addEventListener('input', () => {
+    state.currentSession.exercises[i].name = input.value;
+    saveState();
+    updateList();
+  });
+  input.addEventListener('focus', updateList);
+  input.addEventListener('blur', () => { setTimeout(() => list.style.display = 'none', 150); });
+}
+
+function pickName(i, name) {
+  state.currentSession.exercises[i].name = name;
+  saveState();
+  renderExercises();
+}
+
+// =====================================================================
+// LAST SESSION LOOKUP (for target-to-beat hints)
+// Finds the most recent prior entry for an exercise by name
+// =====================================================================
+function findLastExerciseData(exerciseName) {
+  if (!exerciseName) return null;
+  const nameLower = exerciseName.toLowerCase();
+  for (const session of state.history) {
+    if (session.type !== 'lifts') continue;
+    for (const ex of (session.exercises || [])) {
+      if ((ex.name || '').toLowerCase() === nameLower) return ex;
+    }
+  }
+  return null;
+}
+
+function summarizeExerciseText(ex) {
+  return (ex.sets || []).map(s => {
+    if (s.type === 'warmup') return `${s.weight||'-'}x${s.reps||'-'}wu`;
+    if (s.type === 'working') return `${s.weight||'-'}x${s.reps||'-'}${s.rpe?'@'+s.rpe:''}`;
+    if (s.type === 'myorep') return `${s.weight||'-'}×[${s.sequence||'-'}]`;
+    if (s.type === 'drop') return `drop: ${s.sequence||'-'}`;
+  }).join(' · ');
+}
+
+// =====================================================================
+// TEMPLATES
+// =====================================================================
+
+function saveCurrentAsTemplate() {
+  const name = prompt('Template name?', state.currentSession.name || 'New Template');
+  if (!name) return;
+  // copy exercises but strip the logged values - keep just names and set structure
+  const tplExercises = state.currentSession.exercises.map(ex => ({
+    name: ex.name,
+    sets: ex.sets.map(s => {
+      const copy = { type: s.type };
+      // keep structure (type) but blank out actual numbers so user logs fresh
+      return copy;
+    }),
+    notes: ''
+  }));
+  state.templates.push({ name, type: state.currentSession.type, exercises: tplExercises });
+  saveState();
+  alert('Template saved.');
+  renderTemplates();
+}
+
+function loadTemplateIntoSession() {
+  const idx = document.getElementById('template-picker').value;
+  if (idx === '') return;
+  const tpl = state.templates[parseInt(idx)];
+  if (!tpl) return;
+  if (state.currentSession.exercises.length > 0 && !confirm('Replace current exercises with template?')) return;
+  // deep copy so editing the session doesn't mutate the template
+  state.currentSession.type = tpl.type;
+  state.currentSession.name = state.currentSession.name || tpl.name;
+  state.currentSession.exercises = tpl.exercises.map(ex => ({
+    name: ex.name,
+    sets: (ex.sets || []).map(s => ({ type: s.type })), // blank values, keep types
+    notes: ''
+  }));
+  document.getElementById('session-type').value = tpl.type;
+  document.getElementById('session-name').value = state.currentSession.name;
+  saveState();
+  onSessionTypeChange();
+  // reset picker so user can re-load if needed
+  document.getElementById('template-picker').value = '';
+}
+
+function renderTemplates() {
+  const c = document.getElementById('templates-list');
+  if (state.templates.length === 0) {
+    c.innerHTML = '<p class="muted">No templates yet. Build a session on the Log tab and click "Save as Template".</p>';
+    return;
+  }
+  c.innerHTML = state.templates.map((t, i) => `
+    <div class="panel">
+      <div class="header-row">
+        <h3>${escapeHtml(t.name)} <span class="tag">${t.type}</span></h3>
+        <div>
+          <button class="btn-small" onclick="renameTemplate(${i})">Rename</button>
+          <button class="btn-danger" onclick="deleteTemplate(${i})">Delete</button>
+        </div>
+      </div>
+      <pre>${escapeHtml((t.exercises || []).map(e => `• ${e.name} — ${(e.sets||[]).map(s=>s.type).join(', ')}`).join('\n'))}</pre>
+    </div>
+  `).join('');
+}
+
+function renameTemplate(i) {
+  const name = prompt('New name?', state.templates[i].name);
+  if (!name) return;
+  state.templates[i].name = name;
+  saveState();
+  renderTemplates();
+}
+
+function deleteTemplate(i) {
+  if (!confirm('Delete this template?')) return;
+  state.templates.splice(i, 1);
+  saveState();
+  renderTemplates();
+}
+
+// =====================================================================
+// SAVE SESSION TO HISTORY
+// =====================================================================
+function saveSessionToHistory() {
+  const s = state.currentSession;
+  if (s.type === 'lifts' && s.exercises.length === 0) {
+    if (!confirm('No exercises logged. Save anyway?')) return;
+  }
+  // push a deep copy to history (so the current session can be cleared independently)
+  state.history.unshift(JSON.parse(JSON.stringify(s)));
+  state.currentSession = emptySession();
+  saveState();
+  alert('Session saved to history.');
+  renderLog();
+}
+
+function clearSession() {
+  if (!confirm('Clear the current session without saving?')) return;
+  state.currentSession = emptySession();
+  saveState();
+  renderLog();
+}
+
+// =====================================================================
+// HISTORY
+// =====================================================================
+
+function renderHistory() {
+  // populate phase filter
+  const filterEl = document.getElementById('history-filter');
+  const phases = Array.from(new Set(state.history.map(s => s.phase).filter(Boolean))).sort();
+  const currentFilter = filterEl.value;
+  filterEl.innerHTML = '<option value="">all</option>' +
+    phases.map(p => `<option value="${escapeHtml(p)}" ${p===currentFilter?'selected':''}>${escapeHtml(p)}</option>`).join('');
+
+  const c = document.getElementById('history-list');
+  const filtered = currentFilter
+    ? state.history.filter(s => s.phase === currentFilter)
+    : state.history;
+
+  if (filtered.length === 0) {
+    c.innerHTML = '<p class="muted">No sessions yet.</p>';
+    return;
+  }
+  c.innerHTML = filtered.map((s, i) => {
+    const duration = (s.startTime && s.endTime) ? ` • ${s.startTime}–${s.endTime}` : '';
+    const bw = s.bodyweight ? ` • ${s.bodyweight} lb` : '';
+    return `
+      <div class="session-card ${s.type}">
+        <div class="header-row">
+          <h3>${escapeHtml(s.date)} ${escapeHtml(s.name || '(unnamed)')}
+            <span class="tag">${s.type}</span>
+            ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
+          </h3>
+          <button class="btn-danger" onclick="deleteHistory(${state.history.indexOf(s)})">Delete</button>
+        </div>
+        <p class="muted">${escapeHtml(duration + bw)}</p>
+        <pre>${escapeHtml(summarizeSessionText(s))}</pre>
+      </div>`;
+  }).join('');
+}
+
+function summarizeSessionText(s) {
+  let out = '';
+  if (s.type === 'lifts') {
+    out = (s.exercises || []).map(ex => {
+      let txt = `${ex.name || '(no name)'}\n  ${summarizeExerciseText(ex)}`;
+      if (ex.notes) txt += `\n  note: ${ex.notes}`;
+      return txt;
+    }).join('\n\n');
+  } else if (s.type === 'run') {
+    const r = s.runData || {};
+    out = `dist ${r.distance||'-'} · time ${r.time||'-'} · pace ${r.pace||'-'} · HR ${r.hr||'-'} · RPE ${r.rpe||'-'}`;
+  } else if (s.type === 'conditioning') {
+    const c = s.condData || {};
+    out = `${c.modality||'-'} · ${c.total||'-'} · RPE ${c.rpe||'-'}\nsplits: ${c.splits||'-'}`;
+  }
+  if (s.notes) out += `\n\nsession notes: ${s.notes}`;
+  return out;
+}
+
+function deleteHistory(i) {
+  if (!confirm('Delete this session permanently?')) return;
+  state.history.splice(i, 1);
+  saveState();
+  renderHistory();
+}
+
+// =====================================================================
+// IMPORT / EXPORT
+// =====================================================================
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `hybrid-trainer-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const imported = JSON.parse(ev.target.result);
+        if (confirm('Replace ALL current data with imported file? (export first if unsure)')) {
+          state = imported;
+          if (!state.currentSession) state.currentSession = emptySession();
+          saveState();
+          renderLog();
+        }
+      } catch (err) { alert('Invalid JSON file.'); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// =====================================================================
+// UTIL
+// =====================================================================
+function escapeHtml(str) {
+  if (str === undefined || str === null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+function escapeJs(str) {
+  return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+// =====================================================================
+// BOOT
+// =====================================================================
+loadState();
+renderLog();
+</script>
+</body>
+</html>
