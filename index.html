@@ -1,19 +1,15 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.4
+  HYBRID TRAINER v0.5
   Single-file web app. Read SCHEMA.md in the repo for data structure.
 
-  What's new vs v0.3:
-    - Edit saved sessions (tap in History → loads into Log → save overwrites)
-    - Warmups auto-sort before working sets
-    - Up/down arrows to reorder sets and exercises
-    - "Today" button for the date field
-    - Settings tab (theme, 24h/12h, units, RPE/RIR/none, default phase)
-    - Export includes schemaVersion for future-proofing
-    - Editing mode is visually distinct (banner at top of Log)
+  What's new vs v0.4:
+    - Run sessions now have a "Run type" selector
+    - Five types: Easy, Tempo, Intervals, Long, Race
+    - Fields shown depend on the type (no more RPE on intervals/race, etc.)
+    - Backwards compatible: old run data without runType defaults to Easy
 
-  Data: forward-compatible with v0.2/v0.3 data. localStorage key 'hybridTrainerV2'.
-  Settings stored separately in localStorage key 'hybridTrainerSettings'.
+  Data: localStorage key 'hybridTrainerV2'. Settings: 'hybridTrainerSettings'.
 -->
 <html lang="en">
 <head>
@@ -308,7 +304,7 @@
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.4</small>
+    <small>v0.5</small>
   </div>
   <div class="header-actions">
     <button class="btn-small" onclick="exportData()">Export</button>
@@ -489,7 +485,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.4 · single-file web app · data lives in this browser's localStorage</small>
+    <small>v0.5 · single-file web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -513,10 +509,77 @@
 </nav>
 
 <script>
-const SCHEMA_VERSION = 4;
+// =====================================================================
+// CONSTANTS
+// =====================================================================
+const SCHEMA_VERSION = 5;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
+// Run types and the fields each one shows.
+// Adding a new type? Add it here. The renderRunForm function reads this.
+// Each field: { key: 'fieldName', label: 'Display label', placeholder: '', type: 'text|number|textarea' }
+const RUN_TYPES = {
+  easy: {
+    name: 'Easy / Z2',
+    fields: [
+      { key: 'distance', label: 'Distance', placeholder: '5.2k', type: 'text' },
+      { key: 'time', label: 'Time', placeholder: '32:00', type: 'text' },
+      { key: 'pace', label: 'Avg pace', placeholder: '6:00/km', type: 'text' },
+      { key: 'hr', label: 'Avg HR', placeholder: '142', type: 'number' },
+      { key: 'rpe', label: 'RPE', placeholder: '3', type: 'number', min: 1, max: 10 },
+      { key: 'notes', label: 'Notes', placeholder: 'How it felt, terrain, etc', type: 'textarea' }
+    ]
+  },
+  tempo: {
+    name: 'Tempo / Threshold',
+    fields: [
+      { key: 'distance', label: 'Distance', placeholder: '5k', type: 'text' },
+      { key: 'time', label: 'Time', placeholder: '21:30', type: 'text' },
+      { key: 'pace', label: 'Avg pace', placeholder: '4:18/km', type: 'text' },
+      { key: 'hr', label: 'Avg HR', placeholder: '168', type: 'number' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  intervals: {
+    name: 'Intervals / Track',
+    fields: [
+      { key: 'workout', label: 'Workout', placeholder: '6x800m', type: 'text' },
+      { key: 'targetPace', label: 'Target pace', placeholder: '3:00/800', type: 'text' },
+      { key: 'recovery', label: 'Recovery', placeholder: '2 min jog', type: 'text' },
+      { key: 'splits', label: 'Splits', placeholder: '2:58, 3:00, 2:59...', type: 'textarea' },
+      { key: 'totalDistance', label: 'Total distance (incl. WU/CD)', placeholder: '8k', type: 'text' },
+      { key: 'totalTime', label: 'Total session time', placeholder: '45:00', type: 'text' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  long: {
+    name: 'Long Run',
+    fields: [
+      { key: 'distance', label: 'Distance', placeholder: '20k', type: 'text' },
+      { key: 'time', label: 'Time', placeholder: '1:45:00', type: 'text' },
+      { key: 'pace', label: 'Avg pace', placeholder: '5:15/km', type: 'text' },
+      { key: 'hr', label: 'Avg HR', placeholder: '148', type: 'number' },
+      { key: 'rpe', label: 'RPE', placeholder: '5', type: 'number', min: 1, max: 10 },
+      { key: 'fueling', label: 'Fueling', placeholder: '2 gels at 45 and 90 min', type: 'textarea' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  race: {
+    name: 'Race',
+    fields: [
+      { key: 'distance', label: 'Distance', placeholder: '10k', type: 'text' },
+      { key: 'time', label: 'Time', placeholder: '42:18', type: 'text' },
+      { key: 'pace', label: 'Avg pace', placeholder: '4:14/km', type: 'text' },
+      { key: 'result', label: 'Result / Place', placeholder: '23rd OA, 3rd AG', type: 'text' },
+      { key: 'notes', label: 'Notes', placeholder: 'Race conditions, splits, etc', type: 'textarea' }
+    ]
+  }
+};
+
+// =====================================================================
+// STATE
+// =====================================================================
 let state = {
   templates: [], history: [], currentSession: null, editingHistoryIndex: null
 };
@@ -530,7 +593,8 @@ function emptySession() {
     startTime: '', endTime: '', bodyweight: '',
     name: '', phase: settings.defaultPhase || '',
     type: 'lifts', exercises: [],
-    runData: {}, condData: {}, notes: ''
+    runData: { runType: 'easy' }, // default run type
+    condData: {}, notes: ''
   };
 }
 function emptyExercise(name = '') { return { name, sets: [], notes: '' }; }
@@ -542,6 +606,10 @@ function loadState() {
   if (!state.templates) state.templates = [];
   if (!state.history) state.history = [];
   state.editingHistoryIndex = null;
+  // Backwards-compat: if currentSession has run data but no runType, default to easy
+  if (state.currentSession.runData && !state.currentSession.runData.runType) {
+    state.currentSession.runData.runType = 'easy';
+  }
   const sset = localStorage.getItem(SETTINGS_KEY);
   if (sset) { try { Object.assign(settings, JSON.parse(sset)); } catch(e){} }
 }
@@ -641,24 +709,8 @@ function onSessionTypeChange() {
   state.currentSession.type = type;
   const area = document.getElementById('exercises-area');
   if (type === 'lifts') { renderExercises(); }
-  else if (type === 'run') {
-    const rd = state.currentSession.runData || {};
-    area.innerHTML = `
-      <div class="card">
-        <h3>Run</h3>
-        <div class="muted" style="margin-bottom:12px">Cardio session</div>
-        <div class="row">
-          <div class="field"><label>Distance</label><input type="text" id="run-distance" placeholder="5.2k" value="${escapeHtml(rd.distance||'')}"></div>
-          <div class="field"><label>Time</label><input type="text" id="run-time" placeholder="26:15" value="${escapeHtml(rd.time||'')}"></div>
-          <div class="field"><label>Pace</label><input type="text" id="run-pace" placeholder="5:02/km" value="${escapeHtml(rd.pace||'')}"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label>Avg HR</label><input type="number" inputmode="numeric" id="run-hr" value="${escapeHtml(rd.hr||'')}"></div>
-          <div class="field"><label>RPE</label><input type="number" inputmode="numeric" id="run-rpe" min="1" max="10" value="${escapeHtml(rd.rpe||'')}"></div>
-        </div>
-      </div>`;
-    ['run-distance','run-time','run-pace','run-hr','run-rpe'].forEach(id => document.getElementById(id).addEventListener('input', syncRunData));
-  } else if (type === 'conditioning') {
+  else if (type === 'run') { renderRunForm(); }
+  else if (type === 'conditioning') {
     const cd = state.currentSession.condData || {};
     area.innerHTML = `
       <div class="card">
@@ -676,16 +728,103 @@ function onSessionTypeChange() {
   updateFabVisibility();
   saveState();
 }
-function syncRunData() {
-  state.currentSession.runData = {
-    distance: document.getElementById('run-distance').value,
-    time: document.getElementById('run-time').value,
-    pace: document.getElementById('run-pace').value,
-    hr: document.getElementById('run-hr').value,
-    rpe: document.getElementById('run-rpe').value
-  };
+
+// =====================================================================
+// RUN FORM (conditional fields based on run type)
+// =====================================================================
+function renderRunForm() {
+  const rd = state.currentSession.runData || {};
+  if (!rd.runType) rd.runType = 'easy';
+  state.currentSession.runData = rd;
+
+  const typeOptions = Object.keys(RUN_TYPES).map(k =>
+    `<option value="${k}" ${rd.runType === k ? 'selected' : ''}>${escapeHtml(RUN_TYPES[k].name)}</option>`
+  ).join('');
+
+  const typeDef = RUN_TYPES[rd.runType] || RUN_TYPES.easy;
+  const fieldsHtml = typeDef.fields.map(f => renderRunField(f, rd)).join('');
+
+  const area = document.getElementById('exercises-area');
+  area.innerHTML = `
+    <div class="card">
+      <div class="field" style="margin-bottom:14px">
+        <label>Run type</label>
+        <select id="run-type-picker" onchange="changeRunType(this.value)">
+          ${typeOptions}
+        </select>
+      </div>
+      <div id="run-fields">
+        ${fieldsHtml}
+      </div>
+    </div>`;
+
+  // wire up listeners for the dynamically rendered fields
+  typeDef.fields.forEach(f => {
+    const el = document.getElementById('run-' + f.key);
+    if (el) el.addEventListener('input', () => updateRunField(f.key, el.value));
+  });
+}
+
+function renderRunField(field, rd) {
+  const value = escapeHtml(rd[field.key] || '');
+  const placeholder = escapeHtml(field.placeholder || '');
+  const id = 'run-' + field.key;
+
+  if (field.type === 'textarea') {
+    return `
+      <div class="field">
+        <label>${escapeHtml(field.label)}</label>
+        <textarea id="${id}" placeholder="${placeholder}">${value}</textarea>
+      </div>`;
+  }
+
+  if (field.type === 'number') {
+    const minMax = (field.min !== undefined ? `min="${field.min}"` : '') +
+                   (field.max !== undefined ? ` max="${field.max}"` : '');
+    return `
+      <div class="field">
+        <label>${escapeHtml(field.label)}</label>
+        <input type="number" inputmode="numeric" id="${id}" ${minMax}
+          placeholder="${placeholder}" value="${value}">
+      </div>`;
+  }
+
+  // default: text
+  return `
+    <div class="field">
+      <label>${escapeHtml(field.label)}</label>
+      <input type="text" id="${id}" placeholder="${placeholder}" value="${value}">
+    </div>`;
+}
+
+function changeRunType(newType) {
+  if (!RUN_TYPES[newType]) return;
+  // Warn if there's existing data that will be hidden (not deleted, just not displayed)
+  const rd = state.currentSession.runData || {};
+  const oldType = rd.runType;
+  if (oldType !== newType) {
+    const oldFields = (RUN_TYPES[oldType] || RUN_TYPES.easy).fields.map(f => f.key);
+    const newFields = RUN_TYPES[newType].fields.map(f => f.key);
+    const orphaned = oldFields.filter(k => !newFields.includes(k) && rd[k]);
+    if (orphaned.length > 0) {
+      if (!confirm(`Some fields from "${RUN_TYPES[oldType].name}" don't exist in "${RUN_TYPES[newType].name}". The data won't be deleted, but it won't be shown. Continue?`)) {
+        document.getElementById('run-type-picker').value = oldType;
+        return;
+      }
+    }
+  }
+  rd.runType = newType;
+  state.currentSession.runData = rd;
+  saveState();
+  renderRunForm();
+}
+
+function updateRunField(key, value) {
+  if (!state.currentSession.runData) state.currentSession.runData = { runType: 'easy' };
+  state.currentSession.runData[key] = value;
   saveState();
 }
+
 function syncCondData() {
   state.currentSession.condData = {
     modality: document.getElementById('cond-modality').value,
@@ -696,6 +835,9 @@ function syncCondData() {
   saveState();
 }
 
+// =====================================================================
+// EXERCISES (lifts) - unchanged from v0.4
+// =====================================================================
 function renderExercises() {
   const area = document.getElementById('exercises-area');
   const exs = state.currentSession.exercises;
@@ -1024,6 +1166,10 @@ function editHistorySession(idx) {
   }
   state.editingHistoryIndex = idx;
   state.currentSession = JSON.parse(JSON.stringify(state.history[idx]));
+  // backwards-compat: ensure runType exists if this is an old run
+  if (state.currentSession.type === 'run' && state.currentSession.runData && !state.currentSession.runData.runType) {
+    state.currentSession.runData.runType = 'easy';
+  }
   saveState();
   document.querySelectorAll('nav.bottom-tabs button').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -1049,11 +1195,14 @@ function renderHistory() {
   c.innerHTML = filtered.map(s => {
     const realIdx = state.history.indexOf(s);
     const meta = formatSessionMeta(s);
+    const runTypeTag = (s.type === 'run' && s.runData && s.runData.runType && RUN_TYPES[s.runData.runType])
+      ? `<span class="tag">${escapeHtml(RUN_TYPES[s.runData.runType].name)}</span>` : '';
     return `
       <div class="session-card ${s.type}" onclick="editHistorySession(${realIdx})">
         <div class="header-row" style="margin-bottom:4px">
           <h3>${escapeHtml(s.date)} ${escapeHtml(s.name || '(unnamed)')}
             <span class="tag">${s.type}</span>
+            ${runTypeTag}
             ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
           </h3>
           <button class="btn-danger" onclick="event.stopPropagation(); deleteHistory(${realIdx})">Delete</button>
@@ -1085,8 +1234,14 @@ function summarizeSessionText(s) {
       return txt;
     }).join('\n\n');
   } else if (s.type === 'run') {
+    // summary based on whichever fields have data
     const r = s.runData || {};
-    out = `dist ${r.distance||'-'} · time ${r.time||'-'} · pace ${r.pace||'-'} · HR ${r.hr||'-'} · RPE ${r.rpe||'-'}`;
+    const typeDef = RUN_TYPES[r.runType] || RUN_TYPES.easy;
+    const lines = typeDef.fields
+      .filter(f => f.key !== 'notes' && r[f.key])
+      .map(f => `${f.label}: ${r[f.key]}`);
+    out = lines.join(' · ');
+    if (r.notes) out += `\nnotes: ${r.notes}`;
   } else if (s.type === 'conditioning') {
     const c = s.condData || {};
     out = `${c.modality||'-'} · ${c.total||'-'} · RPE ${c.rpe||'-'}\nsplits: ${c.splits||'-'}`;
@@ -1177,6 +1332,10 @@ function importData() {
           state.history = toImport.history;
           state.currentSession = toImport.currentSession;
           state.editingHistoryIndex = null;
+          // backwards-compat for imported runs
+          if (state.currentSession.type === 'run' && state.currentSession.runData && !state.currentSession.runData.runType) {
+            state.currentSession.runData.runType = 'easy';
+          }
           saveState(); renderLog();
           alert('Import successful.');
         }
