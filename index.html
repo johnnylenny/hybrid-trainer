@@ -1,335 +1,354 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.2
-  Single-file web app. Open in any browser. Data saves to localStorage.
+  HYBRID TRAINER v0.4
+  Single-file web app. Read SCHEMA.md in the repo for data structure.
 
-  What changed from v1:
-    - Flow is now: Log (free-form) / Templates (saved exercise lists) / History
-    - Session metadata: date, start/end time, bodyweight
-    - Per-set types: warmup, working, myo-rep, drop set
-    - Per-exercise notes + session notes
-    - Exercise name memory (autocomplete from your own past sessions)
-    - Auto-fills last session's numbers as grayed-out targets to beat
+  What's new vs v0.3:
+    - Edit saved sessions (tap in History → loads into Log → save overwrites)
+    - Warmups auto-sort before working sets
+    - Up/down arrows to reorder sets and exercises
+    - "Today" button for the date field
+    - Settings tab (theme, 24h/12h, units, RPE/RIR/none, default phase)
+    - Export includes schemaVersion for future-proofing
+    - Editing mode is visually distinct (banner at top of Log)
 
-  How to read this file:
-    1. <style>   - all the CSS
-    2. <body>    - HTML structure
-    3. <script>  - logic, broken into clearly commented sections:
-                    STATE, SAVE/LOAD, NAV, SESSION LOGIC, TEMPLATE LOGIC,
-                    HISTORY, EXERCISE MEMORY, UTIL
+  Data: forward-compatible with v0.2/v0.3 data. localStorage key 'hybridTrainerV2'.
+  Settings stored separately in localStorage key 'hybridTrainerSettings'.
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hybrid Trainer v0.2</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<title>Hybrid Trainer</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --panel-2: #1e222b;
-    --border: #262a33;
-    --text: #e6e8ec;
-    --muted: #8a8f98;
-    --dim: #5a5f68;
-    --accent: #ffb547;
-    --accent-2: #64a8e6;
-    --danger: #ff6b6b;
-    --good: #7cd992;
-    --warmup: #2a2d35;
+    --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --surface-3: #e8e8eb;
+    --border: #e4e4e7; --border-strong: #d4d4d8;
+    --text: #18181b; --text-muted: #71717a; --text-dim: #a1a1aa;
+    --accent: #f59e0b; --accent-hover: #d97706; --accent-text: #18181b;
+    --success: #16a34a; --info: #2563eb; --danger: #dc2626;
+    --warmup-bg: #f4f4f5; --myorep-bg: rgba(245, 158, 11, 0.08); --drop-bg: rgba(37, 99, 235, 0.08);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-lg: 0 4px 6px rgba(0,0,0,0.05), 0 10px 15px rgba(0,0,0,0.08);
+    --radius-sm: 6px; --radius: 10px; --radius-lg: 14px;
   }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0a0b; --surface: #131316; --surface-2: #1c1c20; --surface-3: #27272a;
+      --border: #27272a; --border-strong: #3f3f46;
+      --text: #fafafa; --text-muted: #a1a1aa; --text-dim: #71717a;
+      --accent: #fbbf24; --accent-hover: #f59e0b; --accent-text: #0a0a0b;
+      --success: #4ade80; --info: #60a5fa; --danger: #f87171;
+      --warmup-bg: #1c1c20; --myorep-bg: rgba(251, 191, 36, 0.10); --drop-bg: rgba(96, 165, 250, 0.10);
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow: 0 1px 3px rgba(0,0,0,0.4); --shadow-lg: 0 10px 20px rgba(0,0,0,0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0a0b; --surface: #131316; --surface-2: #1c1c20; --surface-3: #27272a;
+    --border: #27272a; --border-strong: #3f3f46;
+    --text: #fafafa; --text-muted: #a1a1aa; --text-dim: #71717a;
+    --accent: #fbbf24; --accent-hover: #f59e0b; --accent-text: #0a0a0b;
+    --success: #4ade80; --info: #60a5fa; --danger: #f87171;
+    --warmup-bg: #1c1c20; --myorep-bg: rgba(251, 191, 36, 0.10); --drop-bg: rgba(96, 165, 250, 0.10);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow: 0 1px 3px rgba(0,0,0,0.4); --shadow-lg: 0 10px 20px rgba(0,0,0,0.5);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    line-height: 1.5; min-height: 100vh;
+    padding: 16px 16px calc(80px + env(safe-area-inset-bottom)) 16px;
+    max-width: 720px; margin: 0 auto;
+    font-size: 15px; -webkit-font-smoothing: antialiased;
+  }
+  .mono, input[type="number"], input[type="time"], input[type="date"] {
     font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.45;
-    min-height: 100vh;
-    padding: 12px;
-    max-width: 900px;
-    margin: 0 auto;
+    font-feature-settings: 'tnum';
   }
-  h1 { font-size: 1.3rem; letter-spacing: 0.05em; }
-  h2 { font-size: 0.95rem; color: var(--accent); margin: 14px 0 8px; letter-spacing: 0.05em; text-transform: uppercase; }
-  h3 { font-size: 0.95rem; margin: 10px 0 6px; color: var(--text); }
-  h4 { font-size: 0.85rem; margin: 8px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  p, label, span, div, button, input, select, textarea { font-size: 0.88rem; }
-  .muted { color: var(--muted); font-size: 0.78rem; }
-  .dim { color: var(--dim); }
-
-  nav {
-    display: flex;
-    gap: 2px;
-    margin: 12px 0;
-    border-bottom: 1px solid var(--border);
+  h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+  h2 { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+  h3 { font-size: 1.05rem; font-weight: 600; margin: 0; }
+  p { font-size: 0.95rem; }
+  .muted { color: var(--text-muted); font-size: 0.85rem; }
+  small { font-size: 0.8rem; color: var(--text-muted); }
+  header.top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; gap: 8px; }
+  header.top h1 { line-height: 1.1; }
+  header.top small { display: block; margin-top: 2px; }
+  .header-actions { display: flex; gap: 6px; }
+  .edit-banner {
+    background: var(--info); color: white; padding: 8px 12px;
+    border-radius: var(--radius); margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.85rem; font-weight: 600;
   }
-  nav button {
-    background: none;
-    border: none;
-    color: var(--muted);
-    padding: 10px 12px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.8rem;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    border-bottom: 2px solid transparent;
-    flex: 1;
+  .edit-banner button { background: rgba(255,255,255,0.2); color: white; padding: 4px 10px; border-radius: var(--radius-sm); font-size: 0.78rem; }
+  nav.bottom-tabs {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--surface); border-top: 1px solid var(--border);
+    display: flex; z-index: 100;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -1px 3px rgba(0,0,0,0.04);
   }
-  nav button.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+  nav.bottom-tabs button {
+    flex: 1; background: none; border: none; padding: 12px 4px; cursor: pointer;
+    color: var(--text-muted); font-family: inherit;
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    border-top: 2px solid transparent; margin-top: -1px;
   }
-
+  nav.bottom-tabs button.active { color: var(--accent); border-top-color: var(--accent); }
+  nav.bottom-tabs .tab-icon { font-size: 1.3rem; line-height: 1; }
   .screen { display: none; }
   .screen.active { display: block; }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    padding: 12px;
-    margin-bottom: 10px;
-    border-radius: 4px;
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 12px;
+    box-shadow: var(--shadow-sm);
   }
-
+  .card.compact { padding: 12px; }
+  .card.danger-zone { border-color: var(--danger); }
   input, select, textarea {
-    font-family: inherit;
-    font-size: 0.88rem;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 10px;
-    border-radius: 3px;
-    width: 100%;
+    font-family: inherit; font-size: 1rem;
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 12px; border-radius: var(--radius-sm); width: 100%;
+    transition: border-color 0.1s;
   }
   input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--accent);
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
   }
-  /* placeholder = grayed out target-to-beat from last session */
-  input::placeholder { color: var(--dim); font-style: italic; }
-
-  label { display: block; margin-bottom: 3px; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
-  .field { margin-bottom: 8px; }
-  .row { display: flex; gap: 6px; flex-wrap: wrap; }
-  .row .field { flex: 1; min-width: 90px; }
-
-  button.btn {
-    background: var(--accent);
-    color: #000;
-    border: none;
-    padding: 9px 14px;
-    cursor: pointer;
-    font-weight: 600;
-    border-radius: 3px;
-    letter-spacing: 0.04em;
-    font-family: inherit;
-    font-size: 0.85rem;
+  input::placeholder { color: var(--text-dim); }
+  textarea { min-height: 60px; resize: vertical; }
+  label {
+    display: block; margin-bottom: 4px;
+    color: var(--text-muted); font-size: 0.72rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
   }
-  button.btn-secondary {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 7px 12px;
-    cursor: pointer;
-    border-radius: 3px;
-    font-family: inherit;
-    font-size: 0.82rem;
+  .field { margin-bottom: 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row .field { flex: 1; min-width: 120px; margin-bottom: 0; }
+  .input-with-button { display: flex; gap: 6px; }
+  .input-with-button input { flex: 1; }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  .btn {
+    background: var(--accent); color: var(--accent-text);
+    padding: 12px 18px; font-weight: 600; font-size: 0.95rem;
+    border-radius: var(--radius-sm); letter-spacing: 0.01em;
+    transition: background 0.1s, transform 0.05s; min-height: 44px;
   }
-  button.btn-secondary:hover { border-color: var(--accent); }
-  button.btn-danger {
-    background: transparent;
-    color: var(--danger);
-    border: 1px solid var(--danger);
-    padding: 5px 9px;
-    cursor: pointer;
-    border-radius: 3px;
-    font-size: 0.72rem;
-    font-family: inherit;
+  .btn:active { transform: scale(0.98); }
+  .btn:hover { background: var(--accent-hover); }
+  .btn-secondary {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    padding: 10px 14px; font-size: 0.9rem; font-weight: 500;
+    border-radius: var(--radius-sm); min-height: 40px;
   }
-  button.btn-small {
-    background: var(--panel-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 5px 9px;
-    cursor: pointer;
-    border-radius: 3px;
-    font-size: 0.72rem;
-    font-family: inherit;
+  .btn-secondary:hover { background: var(--surface-3); }
+  .btn-danger {
+    background: transparent; color: var(--danger); border: 1px solid var(--border);
+    padding: 6px 10px; font-size: 0.75rem; border-radius: var(--radius-sm);
   }
-  button.btn-small:hover { border-color: var(--accent); }
-  button:hover { opacity: 0.92; }
-
-  .exercise-block {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 10px;
-    margin-bottom: 10px;
-    background: var(--panel-2);
+  .btn-danger:hover { background: var(--danger); color: white; border-color: var(--danger); }
+  .btn-danger-strong {
+    background: var(--danger); color: white;
+    padding: 10px 14px; font-size: 0.9rem; font-weight: 600;
+    border-radius: var(--radius-sm); min-height: 40px;
   }
-  .exercise-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
+  .btn-small {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    padding: 6px 10px; font-size: 0.8rem; border-radius: var(--radius-sm);
+  }
+  .btn-small:hover { background: var(--surface-3); }
+  .btn-icon {
+    background: transparent; color: var(--text-muted);
+    padding: 6px; border-radius: var(--radius-sm); line-height: 1; font-size: 1.1rem;
+    min-width: 32px;
+  }
+  .btn-icon:hover { background: var(--surface-2); color: var(--text); }
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+  .fab {
+    position: fixed;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    right: 16px;
+    background: var(--accent); color: var(--accent-text);
+    width: 56px; height: 56px; border-radius: 50%;
+    font-size: 1.6rem; font-weight: 300;
+    box-shadow: var(--shadow-lg); z-index: 90;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .fab:active { transform: scale(0.95); }
+  .exercise-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
+    box-shadow: var(--shadow-sm);
+  }
+  .exercise-header { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .exercise-name-input {
+    flex: 1; background: transparent; border: none;
+    border-bottom: 1px dashed var(--border); border-radius: 0;
+    padding: 6px 0; font-size: 1.05rem; font-weight: 600; color: var(--text);
+  }
+  .exercise-name-input:focus { border-color: var(--accent); box-shadow: none; }
+  .last-session-hint {
+    font-size: 0.75rem; color: var(--text-dim); margin-bottom: 8px;
+    padding: 6px 10px; background: var(--surface-2);
+    border-radius: var(--radius-sm); font-style: italic;
+  }
+  .set-table-header {
+    display: grid; gap: 6px;
+    padding: 0 4px 6px 4px;
+    border-bottom: 1px solid var(--border);
     margin-bottom: 6px;
   }
-  .exercise-name-input {
-    font-size: 0.95rem;
-    font-weight: 600;
-    flex: 1;
+  .set-table-header > div {
+    font-size: 0.65rem; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    font-weight: 600; text-align: center;
   }
-
-  /* Set rows */
   .set-row {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-    margin-bottom: 4px;
-    padding: 4px;
-    border-radius: 3px;
-    flex-wrap: wrap;
+    display: grid; gap: 6px; padding: 4px;
+    border-radius: var(--radius-sm); margin-bottom: 4px;
+    align-items: center; transition: background 0.15s;
   }
-  .set-row .set-label {
-    min-width: 28px;
-    font-size: 0.7rem;
-    color: var(--muted);
-    text-align: center;
-    text-transform: uppercase;
+  .set-row.warmup { background: var(--warmup-bg); }
+  .set-row.warmup input { opacity: 0.85; }
+  .set-row.myorep { background: var(--myorep-bg); border-left: 3px solid var(--accent); padding-left: 6px; }
+  .set-row.drop { background: var(--drop-bg); border-left: 3px solid var(--info); padding-left: 6px; }
+  .set-table-header.no-intensity, .set-row.working.no-intensity, .set-row.warmup.no-intensity {
+    grid-template-columns: 28px 1fr 1fr 28px 28px 28px;
   }
+  .set-table-header.with-intensity, .set-row.working.with-intensity, .set-row.warmup.with-intensity {
+    grid-template-columns: 28px 1fr 1fr 1fr 28px 28px 28px;
+  }
+  .set-row.myorep, .set-row.drop {
+    grid-template-columns: 36px 1fr 28px 28px 28px;
+  }
+  .set-label {
+    font-size: 0.8rem; font-weight: 600; color: var(--text-muted);
+    text-align: center; font-family: ui-monospace, monospace;
+  }
+  .set-row.warmup .set-label { color: var(--text-dim); font-size: 0.7rem; }
+  .set-row.myorep .set-label, .set-row.drop .set-label { color: var(--accent); font-size: 0.7rem; }
   .set-row input {
-    padding: 5px 7px;
-    font-size: 0.82rem;
+    padding: 8px 6px; text-align: center; font-size: 0.95rem;
+    background: var(--surface-2); border-color: transparent;
   }
-  .set-row .w-input { max-width: 70px; }
-  .set-row .r-input { max-width: 55px; }
-  .set-row .rpe-input { max-width: 50px; }
-  .set-row .seq-input { flex: 1; min-width: 120px; }
-
-  .set-row.warmup {
-    background: var(--warmup);
-    opacity: 0.75;
+  .set-row input:focus { background: var(--surface); border-color: var(--accent); }
+  .set-row .seq-input { text-align: left; padding-left: 10px; }
+  .reorder-btn {
+    background: transparent; color: var(--text-dim);
+    padding: 4px; border-radius: var(--radius-sm); font-size: 0.85rem; line-height: 1;
   }
-  .set-row.warmup input { font-size: 0.78rem; opacity: 0.85; }
-  .set-row.warmup .set-label { color: var(--dim); }
-
-  .set-row.myorep { background: rgba(255, 181, 71, 0.08); border-left: 2px solid var(--accent); padding-left: 6px; }
-  .set-row.drop { background: rgba(100, 168, 230, 0.08); border-left: 2px solid var(--accent-2); padding-left: 6px; }
-
-  .add-set-buttons { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
-
-  .last-session-hint {
-    font-size: 0.7rem;
-    color: var(--dim);
-    padding: 2px 6px;
-    margin-bottom: 4px;
-    font-style: italic;
+  .reorder-btn:hover { background: var(--surface-2); color: var(--text); }
+  .reorder-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+  .add-set-buttons {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--border);
   }
-
+  .add-set-buttons button { flex: 1; min-width: 70px; font-size: 0.8rem; padding: 8px 6px; }
+  .exercise-notes-input { margin-top: 8px; font-size: 0.85rem; background: var(--surface-2); border-color: transparent; }
+  .exercise-reorder-row {
+    display: flex; gap: 4px; justify-content: flex-end;
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--border);
+  }
   .session-card {
-    border-left: 3px solid var(--border);
-    padding: 10px;
-    margin-bottom: 8px;
-    background: var(--panel);
-    border-radius: 3px;
+    border-left: 4px solid var(--border-strong);
+    background: var(--surface); border-radius: var(--radius);
+    padding: 14px; margin-bottom: 10px; box-shadow: var(--shadow-sm);
+    cursor: pointer;
   }
+  .session-card:hover { border-left-color: var(--accent); }
   .session-card.lifts { border-left-color: var(--accent); }
-  .session-card.run { border-left-color: var(--good); }
-  .session-card.conditioning { border-left-color: var(--accent-2); }
-
+  .session-card.run { border-left-color: var(--success); }
+  .session-card.conditioning { border-left-color: var(--info); }
+  .session-meta { font-size: 0.8rem; color: var(--text-muted); margin: 4px 0 8px 0; }
   .tag {
-    display: inline-block;
-    background: var(--border);
-    color: var(--text);
-    padding: 2px 7px;
-    border-radius: 3px;
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-left: 4px;
+    display: inline-block; background: var(--surface-3); color: var(--text);
+    padding: 2px 8px; border-radius: 4px; font-size: 0.7rem;
+    text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+    margin-left: 4px; vertical-align: middle;
   }
-
-  .header-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 6px; }
-
-  pre { white-space: pre-wrap; font-size: 0.78rem; color: var(--muted); font-family: inherit; }
-
-  /* autocomplete dropdown */
+  .header-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  pre { white-space: pre-wrap; font-size: 0.82rem; color: var(--text-muted); font-family: ui-monospace, monospace; line-height: 1.5; }
   .autocomplete { position: relative; flex: 1; }
   .autocomplete-list {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-top: none;
-    z-index: 10;
-    max-height: 160px;
-    overflow-y: auto;
-    border-radius: 0 0 3px 3px;
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); z-index: 60;
+    max-height: 180px; overflow-y: auto;
+    box-shadow: var(--shadow-lg); margin-top: 4px;
   }
   .autocomplete-item {
-    padding: 6px 10px;
-    cursor: pointer;
-    font-size: 0.82rem;
+    padding: 10px 12px; cursor: pointer; font-size: 0.92rem;
     border-bottom: 1px solid var(--border);
   }
-  .autocomplete-item:hover, .autocomplete-item.selected { background: var(--panel-2); color: var(--accent); }
-
-  @media (max-width: 600px) {
-    body { padding: 8px; }
-    .row { flex-direction: column; }
-    h1 { font-size: 1.1rem; }
-    nav button { font-size: 0.72rem; padding: 8px 6px; }
+  .autocomplete-item:last-child { border-bottom: none; }
+  .autocomplete-item:hover { background: var(--surface-2); color: var(--accent); }
+  .setting-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 0; border-bottom: 1px solid var(--border); gap: 12px;
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-label { flex: 1; }
+  .setting-label .title { font-size: 0.95rem; font-weight: 500; }
+  .setting-label .desc { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+  .setting-control { flex: 0 0 auto; min-width: 130px; max-width: 180px; }
+  @supports (padding: env(safe-area-inset-bottom)) {
+    body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
 </style>
 </head>
 <body>
 
-<header class="header-row">
+<header class="top">
   <div>
-    <h1>HYBRID TRAINER</h1>
-    <p class="muted">v0.2 • data saved in this browser</p>
+    <h1>Hybrid Trainer</h1>
+    <small>v0.4</small>
   </div>
-  <div>
+  <div class="header-actions">
     <button class="btn-small" onclick="exportData()">Export</button>
     <button class="btn-small" onclick="importData()">Import</button>
   </div>
 </header>
 
-<nav>
-  <button data-screen="log" class="active">Log</button>
-  <button data-screen="templates">Templates</button>
-  <button data-screen="history">History</button>
-</nav>
+<div id="edit-banner" class="edit-banner" style="display:none">
+  <span>Editing saved session</span>
+  <button onclick="cancelEdit()">Cancel edit</button>
+</div>
 
-<!-- ========== LOG SCREEN ========== -->
 <section id="screen-log" class="screen active">
-  <div class="panel">
+  <div class="card compact">
     <div class="row">
       <div class="field">
         <label>Date</label>
-        <input type="date" id="session-date">
+        <div class="input-with-button">
+          <input type="date" id="session-date">
+          <button class="btn-small" onclick="setToday()">Today</button>
+        </div>
       </div>
       <div class="field">
         <label>Bodyweight</label>
-        <input type="number" step="0.01" id="session-bw" placeholder="e.g. 205.25">
+        <input type="number" step="0.01" inputmode="decimal" id="session-bw" placeholder="lb">
       </div>
     </div>
     <div class="row">
       <div class="field">
-        <label>Start time</label>
+        <label>Start</label>
         <input type="time" id="session-start">
-        <button class="btn-small" onclick="setNow('session-start')" style="margin-top:4px">Now</button>
       </div>
       <div class="field">
-        <label>End time</label>
+        <label>End</label>
         <input type="time" id="session-end">
-        <button class="btn-small" onclick="setNow('session-end')" style="margin-top:4px">Now</button>
       </div>
     </div>
     <div class="row">
       <div class="field">
-        <label>Session type</label>
+        <label>Type</label>
         <select id="session-type" onchange="onSessionTypeChange()">
           <option value="lifts">Lifts</option>
           <option value="run">Run</option>
@@ -337,16 +356,16 @@
         </select>
       </div>
       <div class="field">
-        <label>Phase (optional)</label>
-        <input type="text" id="session-phase" placeholder="e.g. Hypertrophy, Strength">
+        <label>Phase</label>
+        <input type="text" id="session-phase">
       </div>
       <div class="field">
-        <label>Session name</label>
-        <input type="text" id="session-name" placeholder="e.g. BACK, LEGS">
+        <label>Name</label>
+        <input type="text" id="session-name" placeholder="BACK">
       </div>
     </div>
-    <div class="field">
-      <label>Load from template</label>
+    <div class="field" style="margin-bottom:0">
+      <label>Load template</label>
       <select id="template-picker" onchange="loadTemplateIntoSession()">
         <option value="">— none —</option>
       </select>
@@ -355,110 +374,207 @@
 
   <div id="exercises-area"></div>
 
-  <div class="field">
-    <label>Session notes</label>
-    <textarea id="session-notes" placeholder="e.g. 'Really not into it today'"></textarea>
-  </div>
-
-  <div class="row">
-    <button class="btn" onclick="saveSessionToHistory()">Save Session</button>
-    <button class="btn-secondary" onclick="saveCurrentAsTemplate()">Save as Template</button>
-    <button class="btn-secondary" onclick="clearSession()">Clear</button>
+  <div class="card">
+    <div class="field">
+      <label>Session notes</label>
+      <textarea id="session-notes" placeholder="Anything to remember"></textarea>
+    </div>
+    <div class="btn-group">
+      <button class="btn" onclick="saveSessionToHistory()" id="save-btn">Save Session</button>
+      <button class="btn-secondary" onclick="saveCurrentAsTemplate()">Save as Template</button>
+      <button class="btn-secondary" onclick="clearSession()">Clear</button>
+    </div>
   </div>
 </section>
 
-<!-- ========== TEMPLATES SCREEN ========== -->
+<button class="fab" id="fab-add" onclick="addExercise()" style="display:none">+</button>
+
 <section id="screen-templates" class="screen">
-  <h2>Saved Templates</h2>
-  <p class="muted">Templates are just exercise lists you can load into a session.</p>
+  <h2>Templates</h2>
+  <p class="muted">Saved exercise lists you can load into a session.</p>
   <div id="templates-list"></div>
 </section>
 
-<!-- ========== HISTORY SCREEN ========== -->
 <section id="screen-history" class="screen">
   <h2>History</h2>
-  <div class="field">
-    <label>Filter by phase</label>
-    <select id="history-filter" onchange="renderHistory()">
-      <option value="">all</option>
-    </select>
+  <div class="card compact">
+    <div class="field" style="margin-bottom:0">
+      <label>Filter by phase</label>
+      <select id="history-filter" onchange="renderHistory()">
+        <option value="">all</option>
+      </select>
+    </div>
   </div>
+  <p class="muted" style="margin: 8px 4px 12px 4px">Tap a session to edit it.</p>
   <div id="history-list"></div>
 </section>
 
+<section id="screen-settings" class="screen">
+  <h2>Settings</h2>
+  <div class="card">
+    <div class="setting-row">
+      <div class="setting-label">
+        <div class="title">Theme</div>
+        <div class="desc">Match system or pick manually</div>
+      </div>
+      <div class="setting-control">
+        <select id="set-theme" onchange="updateSetting('theme', this.value)">
+          <option value="auto">Auto (system)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
+        <div class="title">Time format</div>
+        <div class="desc">Affects how times display in History</div>
+      </div>
+      <div class="setting-control">
+        <select id="set-timeformat" onchange="updateSetting('timeFormat', this.value)">
+          <option value="24">24-hour (18:41)</option>
+          <option value="12">12-hour (6:41 PM)</option>
+        </select>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
+        <div class="title">Units</div>
+        <div class="desc">Label only. Doesn't convert existing data.</div>
+      </div>
+      <div class="setting-control">
+        <select id="set-units" onchange="updateSetting('units', this.value)">
+          <option value="lb">lb</option>
+          <option value="kg">kg</option>
+        </select>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
+        <div class="title">Intensity tracking</div>
+        <div class="desc">RPE = effort 1-10. RIR = reps in reserve.</div>
+      </div>
+      <div class="setting-control">
+        <select id="set-intensity" onchange="updateSetting('intensity', this.value); renderLog();">
+          <option value="off">Off</option>
+          <option value="rpe">RPE</option>
+          <option value="rir">RIR</option>
+        </select>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
+        <div class="title">Default phase</div>
+        <div class="desc">Auto-fills the Phase field on new sessions</div>
+      </div>
+      <div class="setting-control">
+        <input type="text" id="set-defaultphase" oninput="updateSetting('defaultPhase', this.value)">
+      </div>
+    </div>
+  </div>
+
+  <h2>Data</h2>
+  <div class="card">
+    <div class="btn-group" style="margin-bottom:10px">
+      <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
+      <button class="btn-secondary" onclick="importData()">Import from file</button>
+    </div>
+    <p class="muted">Exports include a schemaVersion field so future versions can read old files.</p>
+  </div>
+
+  <h2>Danger zone</h2>
+  <div class="card danger-zone">
+    <p class="muted" style="margin-bottom:12px">Permanently deletes everything: sessions, templates, current session. There is no undo.</p>
+    <button class="btn-danger-strong" onclick="nukeAllData()">Delete all data</button>
+  </div>
+
+  <div class="card compact">
+    <small>v0.4 · single-file web app · data lives in this browser's localStorage</small>
+  </div>
+</section>
+
+<nav class="bottom-tabs">
+  <button data-screen="log" class="active">
+    <span class="tab-icon">●</span>
+    <span>Log</span>
+  </button>
+  <button data-screen="templates">
+    <span class="tab-icon">▤</span>
+    <span>Templates</span>
+  </button>
+  <button data-screen="history">
+    <span class="tab-icon">⊟</span>
+    <span>History</span>
+  </button>
+  <button data-screen="settings">
+    <span class="tab-icon">⚙</span>
+    <span>Settings</span>
+  </button>
+</nav>
+
 <script>
-// =====================================================================
-// STATE
-// Three things live in state:
-//   plan.templates  - saved exercise lists for quick reuse
-//   history         - completed sessions
-//   currentSession  - the session being built right now on the Log tab
-// =====================================================================
+const SCHEMA_VERSION = 4;
+const STORAGE_KEY = 'hybridTrainerV2';
+const SETTINGS_KEY = 'hybridTrainerSettings';
+
 let state = {
-  templates: [],    // [{ name, type, exercises: [...] }]
-  history: [],      // [{ date, startTime, endTime, bodyweight, name, phase, type, exercises, runData, condData, notes }]
-  currentSession: null
+  templates: [], history: [], currentSession: null, editingHistoryIndex: null
+};
+let settings = {
+  theme: 'auto', timeFormat: '24', units: 'lb', intensity: 'rpe', defaultPhase: ''
 };
 
 function emptySession() {
   return {
     date: new Date().toISOString().slice(0, 10),
-    startTime: '',
-    endTime: '',
-    bodyweight: '',
-    name: '',
-    phase: '',
-    type: 'lifts',
-    exercises: [],      // for type=lifts
-    runData: {},        // for type=run
-    condData: {},       // for type=conditioning
-    notes: ''
+    startTime: '', endTime: '', bodyweight: '',
+    name: '', phase: settings.defaultPhase || '',
+    type: 'lifts', exercises: [],
+    runData: {}, condData: {}, notes: ''
   };
 }
-
-function emptyExercise(name = '') {
-  return {
-    name,
-    sets: [],           // [{ type: 'warmup'|'working'|'myorep'|'drop', ...fields }]
-    notes: ''
-  };
-}
+function emptyExercise(name = '') { return { name, sets: [], notes: '' }; }
 
 function loadState() {
-  const saved = localStorage.getItem('hybridTrainerV2');
-  if (saved) {
-    try { state = JSON.parse(saved); }
-    catch (e) { console.warn('Parse failed, starting fresh'); }
-  }
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) { try { state = JSON.parse(saved); } catch (e) { console.warn('parse failed'); } }
   if (!state.currentSession) state.currentSession = emptySession();
   if (!state.templates) state.templates = [];
   if (!state.history) state.history = [];
+  state.editingHistoryIndex = null;
+  const sset = localStorage.getItem(SETTINGS_KEY);
+  if (sset) { try { Object.assign(settings, JSON.parse(sset)); } catch(e){} }
 }
-
 function saveState() {
-  localStorage.setItem('hybridTrainerV2', JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    templates: state.templates, history: state.history, currentSession: state.currentSession
+  }));
+}
+function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); applyTheme(); }
+function applyTheme() {
+  if (settings.theme === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', settings.theme);
 }
 
-// =====================================================================
-// NAV
-// =====================================================================
-document.querySelectorAll('nav button').forEach(btn => {
+document.querySelectorAll('nav.bottom-tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('nav.bottom-tabs button').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('screen-' + btn.dataset.screen).classList.add('active');
+    updateFabVisibility();
     if (btn.dataset.screen === 'log') renderLog();
     if (btn.dataset.screen === 'templates') renderTemplates();
     if (btn.dataset.screen === 'history') renderHistory();
+    if (btn.dataset.screen === 'settings') renderSettings();
+    window.scrollTo(0, 0);
   });
 });
-
-// =====================================================================
-// LOG SCREEN
-// The Log screen is always editing state.currentSession.
-// Every change calls syncSessionFromForm() so we don't lose data.
-// =====================================================================
+function updateFabVisibility() {
+  const onLog = document.getElementById('screen-log').classList.contains('active');
+  const isLifts = state.currentSession && state.currentSession.type === 'lifts';
+  document.getElementById('fab-add').style.display = (onLog && isLifts) ? 'flex' : 'none';
+}
 
 function renderLog() {
   const s = state.currentSession;
@@ -470,22 +586,45 @@ function renderLog() {
   document.getElementById('session-phase').value = s.phase || '';
   document.getElementById('session-name').value = s.name || '';
   document.getElementById('session-notes').value = s.notes || '';
+  document.querySelector('#session-bw').placeholder = settings.units;
+  document.querySelector('#session-phase').placeholder = settings.defaultPhase || 'e.g. Hypertrophy';
 
-  // fill template picker
   const picker = document.getElementById('template-picker');
   picker.innerHTML = '<option value="">— none —</option>' +
     state.templates.map((t, i) => `<option value="${i}">${escapeHtml(t.name)}</option>`).join('');
 
-  onSessionTypeChange();
+  const editing = state.editingHistoryIndex !== null;
+  document.getElementById('edit-banner').style.display = editing ? 'flex' : 'none';
+  document.getElementById('save-btn').textContent = editing ? 'Save Changes' : 'Save Session';
 
-  // wire up basic field listeners (only once)
+  onSessionTypeChange();
+  updateFabVisibility();
+
   if (!renderLog._wired) {
     ['session-date','session-bw','session-start','session-end','session-phase','session-name','session-notes']
       .forEach(id => document.getElementById(id).addEventListener('input', syncSessionFromForm));
+    ['session-start','session-end'].forEach(id => {
+      document.getElementById(id).addEventListener('focus', e => {
+        if (!e.target.value) {
+          const now = new Date();
+          e.target.value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+          syncSessionFromForm();
+        }
+      });
+    });
     renderLog._wired = true;
   }
 }
-
+function setToday() {
+  state.currentSession.date = new Date().toISOString().slice(0, 10);
+  saveState(); renderLog();
+}
+function cancelEdit() {
+  if (!confirm('Discard your edits and return to a new blank session?')) return;
+  state.editingHistoryIndex = null;
+  state.currentSession = emptySession();
+  saveState(); renderLog();
+}
 function syncSessionFromForm() {
   const s = state.currentSession;
   s.date = document.getElementById('session-date').value;
@@ -497,48 +636,46 @@ function syncSessionFromForm() {
   s.notes = document.getElementById('session-notes').value;
   saveState();
 }
-
 function onSessionTypeChange() {
   const type = document.getElementById('session-type').value;
   state.currentSession.type = type;
   const area = document.getElementById('exercises-area');
-  if (type === 'lifts') {
-    renderExercises();
-  } else if (type === 'run') {
+  if (type === 'lifts') { renderExercises(); }
+  else if (type === 'run') {
     const rd = state.currentSession.runData || {};
     area.innerHTML = `
-      <div class="panel session-card run">
-        <h3>Run session</h3>
+      <div class="card">
+        <h3>Run</h3>
+        <div class="muted" style="margin-bottom:12px">Cardio session</div>
         <div class="row">
-          <div class="field"><label>Distance</label><input type="text" id="run-distance" placeholder="e.g. 5.2k" value="${escapeHtml(rd.distance||'')}"></div>
-          <div class="field"><label>Time</label><input type="text" id="run-time" placeholder="e.g. 26:15" value="${escapeHtml(rd.time||'')}"></div>
-          <div class="field"><label>Avg pace</label><input type="text" id="run-pace" placeholder="e.g. 5:02/km" value="${escapeHtml(rd.pace||'')}"></div>
+          <div class="field"><label>Distance</label><input type="text" id="run-distance" placeholder="5.2k" value="${escapeHtml(rd.distance||'')}"></div>
+          <div class="field"><label>Time</label><input type="text" id="run-time" placeholder="26:15" value="${escapeHtml(rd.time||'')}"></div>
+          <div class="field"><label>Pace</label><input type="text" id="run-pace" placeholder="5:02/km" value="${escapeHtml(rd.pace||'')}"></div>
         </div>
         <div class="row">
-          <div class="field"><label>Avg HR</label><input type="number" id="run-hr" value="${escapeHtml(rd.hr||'')}"></div>
-          <div class="field"><label>RPE</label><input type="number" id="run-rpe" min="1" max="10" value="${escapeHtml(rd.rpe||'')}"></div>
+          <div class="field"><label>Avg HR</label><input type="number" inputmode="numeric" id="run-hr" value="${escapeHtml(rd.hr||'')}"></div>
+          <div class="field"><label>RPE</label><input type="number" inputmode="numeric" id="run-rpe" min="1" max="10" value="${escapeHtml(rd.rpe||'')}"></div>
         </div>
       </div>`;
-    ['run-distance','run-time','run-pace','run-hr','run-rpe'].forEach(id =>
-      document.getElementById(id).addEventListener('input', syncRunData));
+    ['run-distance','run-time','run-pace','run-hr','run-rpe'].forEach(id => document.getElementById(id).addEventListener('input', syncRunData));
   } else if (type === 'conditioning') {
     const cd = state.currentSession.condData || {};
     area.innerHTML = `
-      <div class="panel session-card conditioning">
-        <h3>Conditioning session</h3>
+      <div class="card">
+        <h3>Conditioning</h3>
+        <div class="muted" style="margin-bottom:12px">Intervals, machines, anything</div>
         <div class="row">
-          <div class="field"><label>Modality</label><input type="text" id="cond-modality" placeholder="e.g. Row, Bike, AirDyne" value="${escapeHtml(cd.modality||'')}"></div>
-          <div class="field"><label>Total work</label><input type="text" id="cond-total" placeholder="e.g. 6x500m" value="${escapeHtml(cd.total||'')}"></div>
-          <div class="field"><label>RPE</label><input type="number" id="cond-rpe" min="1" max="10" value="${escapeHtml(cd.rpe||'')}"></div>
+          <div class="field"><label>Modality</label><input type="text" id="cond-modality" placeholder="Row, Bike, AirDyne" value="${escapeHtml(cd.modality||'')}"></div>
+          <div class="field"><label>Total work</label><input type="text" id="cond-total" placeholder="6x500m" value="${escapeHtml(cd.total||'')}"></div>
+          <div class="field"><label>RPE</label><input type="number" inputmode="numeric" id="cond-rpe" min="1" max="10" value="${escapeHtml(cd.rpe||'')}"></div>
         </div>
-        <div class="field"><label>Splits / details</label><textarea id="cond-splits" placeholder="e.g. 1:45, 1:47, 1:46...">${escapeHtml(cd.splits||'')}</textarea></div>
+        <div class="field"><label>Splits / details</label><textarea id="cond-splits">${escapeHtml(cd.splits||'')}</textarea></div>
       </div>`;
-    ['cond-modality','cond-total','cond-rpe','cond-splits'].forEach(id =>
-      document.getElementById(id).addEventListener('input', syncCondData));
+    ['cond-modality','cond-total','cond-rpe','cond-splits'].forEach(id => document.getElementById(id).addEventListener('input', syncCondData));
   }
+  updateFabVisibility();
   saveState();
 }
-
 function syncRunData() {
   state.currentSession.runData = {
     distance: document.getElementById('run-distance').value,
@@ -549,7 +686,6 @@ function syncRunData() {
   };
   saveState();
 }
-
 function syncCondData() {
   state.currentSession.condData = {
     modality: document.getElementById('cond-modality').value,
@@ -560,108 +696,113 @@ function syncCondData() {
   saveState();
 }
 
-function setNow(id) {
-  const now = new Date();
-  const hh = String(now.getHours()).padStart(2,'0');
-  const mm = String(now.getMinutes()).padStart(2,'0');
-  document.getElementById(id).value = `${hh}:${mm}`;
-  syncSessionFromForm();
-}
-
-// =====================================================================
-// EXERCISES within the current session (lifts only)
-// =====================================================================
-
 function renderExercises() {
   const area = document.getElementById('exercises-area');
   const exs = state.currentSession.exercises;
-  area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i)).join('') + `
-    <button class="btn-secondary" onclick="addExercise()">+ Add Exercise</button>
-  `;
-  // set up autocomplete on every exercise name input
+  if (exs.length === 0) {
+    area.innerHTML = `<div class="card" style="text-align:center; padding:30px 16px;">
+      <div class="muted" style="margin-bottom:12px">No exercises yet</div>
+      <button class="btn" onclick="addExercise()">+ Add Exercise</button>
+    </div>`;
+    return;
+  }
+  area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i, exs.length)).join('');
   exs.forEach((_, i) => wireAutocomplete(i));
 }
 
-function renderExerciseBlock(ex, i) {
+function renderExerciseBlock(ex, i, total) {
   const last = findLastExerciseData(ex.name);
   const hint = last ? `Last: ${summarizeExerciseText(last)}` : '';
+  const hasTabularSets = ex.sets.some(s => s.type === 'working' || s.type === 'warmup');
+  const showIntensity = settings.intensity !== 'off';
+  const gridClass = showIntensity ? 'with-intensity' : 'no-intensity';
+  const intensityHeader = showIntensity ? `<div>${settings.intensity.toUpperCase()}</div>` : '';
 
   return `
-    <div class="exercise-block">
+    <div class="exercise-card">
       <div class="exercise-header">
-        <div class="autocomplete" style="flex:1">
-          <input type="text" class="exercise-name-input"
-            id="ex-name-${i}"
-            value="${escapeHtml(ex.name)}"
-            placeholder="Exercise name"
-            autocomplete="off">
+        <div class="autocomplete">
+          <input type="text" class="exercise-name-input" id="ex-name-${i}"
+            value="${escapeHtml(ex.name)}" placeholder="Exercise name" autocomplete="off">
           <div class="autocomplete-list" id="ac-list-${i}" style="display:none"></div>
         </div>
-        <button class="btn-danger" onclick="removeExercise(${i})">Delete</button>
+        <button class="btn-icon" onclick="removeExercise(${i})" title="Delete">✕</button>
       </div>
       ${hint ? `<div class="last-session-hint">${escapeHtml(hint)}</div>` : ''}
+      ${hasTabularSets ? `
+        <div class="set-table-header ${gridClass}">
+          <div>#</div><div>Weight</div><div>Reps</div>${intensityHeader}<div></div><div></div><div></div>
+        </div>` : ''}
       <div id="sets-${i}">
         ${ex.sets.map((set, si) => renderSetRow(i, si, set, last)).join('')}
       </div>
       <div class="add-set-buttons">
         <button class="btn-small" onclick="addSet(${i}, 'warmup')">+ Warmup</button>
-        <button class="btn-small" onclick="addSet(${i}, 'working')">+ Working</button>
-        <button class="btn-small" onclick="addSet(${i}, 'myorep')">+ Myo-rep</button>
-        <button class="btn-small" onclick="addSet(${i}, 'drop')">+ Drop set</button>
+        <button class="btn-small" onclick="addSet(${i}, 'working')">+ Set</button>
+        <button class="btn-small" onclick="addSet(${i}, 'myorep')">+ Myo</button>
+        <button class="btn-small" onclick="addSet(${i}, 'drop')">+ Drop</button>
       </div>
-      <div class="field" style="margin-top:8px">
-        <label>Exercise notes</label>
-        <input type="text" value="${escapeHtml(ex.notes||'')}"
-          oninput="updateExerciseNotes(${i}, this.value)"
-          placeholder="e.g. 'felt light, no belt'">
+      <input type="text" class="exercise-notes-input" value="${escapeHtml(ex.notes||'')}"
+        oninput="updateExerciseNotes(${i}, this.value)"
+        placeholder="Notes (e.g. felt light, no belt)">
+      <div class="exercise-reorder-row">
+        <button class="reorder-btn" onclick="moveExercise(${i}, -1)" ${i===0?'disabled':''} title="Move up">▲</button>
+        <button class="reorder-btn" onclick="moveExercise(${i}, 1)" ${i===total-1?'disabled':''} title="Move down">▼</button>
       </div>
     </div>`;
 }
 
 function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
-  // compute "target to beat" hints from last session's equivalent set
+  const sets = state.currentSession.exercises[exIdx].sets;
   const hint = lastExerciseData && lastExerciseData.sets && lastExerciseData.sets[setIdx];
   const hintW = hint && hint.type === set.type && hint.weight ? hint.weight : '';
   const hintR = hint && hint.type === set.type && hint.reps ? hint.reps : '';
   const hintSeq = hint && hint.type === set.type && hint.sequence ? hint.sequence : '';
+  const hintIntensity = hint && hint.type === 'working' && (hint.rpe || hint.rir) ? (hint[settings.intensity] || hint.rpe || hint.rir) : '';
+  const showIntensity = settings.intensity !== 'off';
+  const gridClass = showIntensity ? 'with-intensity' : 'no-intensity';
+
+  const upDisabled = setIdx === 0 ? 'disabled' : '';
+  const downDisabled = setIdx === sets.length - 1 ? 'disabled' : '';
+  const upBtn = `<button class="reorder-btn" onclick="moveSet(${exIdx},${setIdx},-1)" ${upDisabled}>▲</button>`;
+  const downBtn = `<button class="reorder-btn" onclick="moveSet(${exIdx},${setIdx},1)" ${downDisabled}>▼</button>`;
+  const delBtn = `<button class="btn-icon" onclick="removeSet(${exIdx},${setIdx})">×</button>`;
 
   if (set.type === 'warmup') {
     return `
-      <div class="set-row warmup">
-        <span class="set-label">WU</span>
-        <input type="number" class="w-input" placeholder="${hintW||'wt'}" value="${escapeHtml(set.weight||'')}"
+      <div class="set-row warmup ${gridClass}">
+        <span class="set-label">w</span>
+        <input type="number" inputmode="decimal" placeholder="${hintW||'-'}" value="${escapeHtml(set.weight||'')}"
           oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
-        <span class="dim">×</span>
-        <input type="text" class="r-input" placeholder="${hintR||'reps'}" value="${escapeHtml(set.reps||'')}"
+        <input type="text" inputmode="numeric" placeholder="${hintR||'-'}" value="${escapeHtml(set.reps||'')}"
           oninput="updateSet(${exIdx},${setIdx},'reps',this.value)">
-        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+        ${showIntensity ? '<span></span>' : ''}
+        ${upBtn}${downBtn}${delBtn}
       </div>`;
   }
   if (set.type === 'working') {
-    const hintRPE = hint && hint.type === 'working' && hint.rpe ? hint.rpe : '';
+    const intensityField = showIntensity
+      ? `<input type="number" inputmode="numeric" min="0" max="10" placeholder="${hintIntensity||'-'}" value="${escapeHtml(set[settings.intensity]||'')}"
+          oninput="updateSet(${exIdx},${setIdx},'${settings.intensity}',this.value)">`
+      : '';
     return `
-      <div class="set-row">
-        <span class="set-label">W${countWorkingBefore(exIdx, setIdx)}</span>
-        <input type="number" class="w-input" placeholder="${hintW||'wt'}" value="${escapeHtml(set.weight||'')}"
+      <div class="set-row working ${gridClass}">
+        <span class="set-label">${countWorkingBefore(exIdx, setIdx)}</span>
+        <input type="number" inputmode="decimal" placeholder="${hintW||'-'}" value="${escapeHtml(set.weight||'')}"
           oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
-        <span class="dim">×</span>
-        <input type="text" class="r-input" placeholder="${hintR||'reps'}" value="${escapeHtml(set.reps||'')}"
+        <input type="text" inputmode="numeric" placeholder="${hintR||'-'}" value="${escapeHtml(set.reps||'')}"
           oninput="updateSet(${exIdx},${setIdx},'reps',this.value)">
-        <input type="number" class="rpe-input" placeholder="${hintRPE||'RPE'}" min="1" max="10" value="${escapeHtml(set.rpe||'')}"
-          oninput="updateSet(${exIdx},${setIdx},'rpe',this.value)">
-        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+        ${intensityField}
+        ${upBtn}${downBtn}${delBtn}
       </div>`;
   }
   if (set.type === 'myorep') {
     return `
       <div class="set-row myorep">
         <span class="set-label">MYO</span>
-        <input type="number" class="w-input" placeholder="${hintW||'wt'}" value="${escapeHtml(set.weight||'')}"
-          oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
-        <span class="dim">×</span>
-        <input type="text" class="seq-input" placeholder="${hintSeq||'14, 8, 3, 2'}" value="${escapeHtml(set.sequence||'')}"
+        <input type="text" class="seq-input" placeholder="${hintSeq||'wt × 14, 8, 3, 2'}" value="${escapeHtml(set.sequence||'')}"
           oninput="updateSet(${exIdx},${setIdx},'sequence',this.value)">
-        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+        ${upBtn}${downBtn}${delBtn}
       </div>`;
   }
   if (set.type === 'drop') {
@@ -670,7 +811,7 @@ function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
         <span class="set-label">DROP</span>
         <input type="text" class="seq-input" placeholder="${hintSeq||'35x8, 25x7, 15x11'}" value="${escapeHtml(set.sequence||'')}"
           oninput="updateSet(${exIdx},${setIdx},'sequence',this.value)">
-        <button class="btn-danger" onclick="removeSet(${exIdx},${setIdx})">×</button>
+        ${upBtn}${downBtn}${delBtn}
       </div>`;
   }
 }
@@ -681,64 +822,70 @@ function countWorkingBefore(exIdx, setIdx) {
   for (let i = 0; i <= setIdx; i++) if (sets[i].type === 'working') n++;
   return n;
 }
-
+function sortSetsWarmupFirst(sets) {
+  const warmups = sets.filter(s => s.type === 'warmup');
+  const others = sets.filter(s => s.type !== 'warmup');
+  return [...warmups, ...others];
+}
 function addExercise() {
   state.currentSession.exercises.push(emptyExercise());
   saveState();
   renderExercises();
+  setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 50);
 }
-
 function removeExercise(i) {
   if (!confirm('Remove this exercise?')) return;
   state.currentSession.exercises.splice(i, 1);
-  saveState();
-  renderExercises();
+  saveState(); renderExercises();
 }
-
+function moveExercise(i, dir) {
+  const exs = state.currentSession.exercises;
+  const j = i + dir;
+  if (j < 0 || j >= exs.length) return;
+  [exs[i], exs[j]] = [exs[j], exs[i]];
+  saveState(); renderExercises();
+}
 function addSet(exIdx, type) {
   const newSet = { type };
   if (type === 'warmup' || type === 'working') { newSet.weight = ''; newSet.reps = ''; }
-  if (type === 'working') newSet.rpe = '';
+  if (type === 'working') { newSet.rpe = ''; newSet.rir = ''; }
   if (type === 'myorep') { newSet.weight = ''; newSet.sequence = ''; }
   if (type === 'drop') newSet.sequence = '';
-  state.currentSession.exercises[exIdx].sets.push(newSet);
-  saveState();
-  renderExercises();
+  const sets = state.currentSession.exercises[exIdx].sets;
+  sets.push(newSet);
+  state.currentSession.exercises[exIdx].sets = sortSetsWarmupFirst(sets);
+  saveState(); renderExercises();
 }
-
 function removeSet(exIdx, setIdx) {
   state.currentSession.exercises[exIdx].sets.splice(setIdx, 1);
-  saveState();
-  renderExercises();
+  saveState(); renderExercises();
 }
-
+function moveSet(exIdx, setIdx, dir) {
+  const sets = state.currentSession.exercises[exIdx].sets;
+  const j = setIdx + dir;
+  if (j < 0 || j >= sets.length) return;
+  [sets[setIdx], sets[j]] = [sets[j], sets[setIdx]];
+  saveState(); renderExercises();
+}
 function updateSet(exIdx, setIdx, field, value) {
   state.currentSession.exercises[exIdx].sets[setIdx][field] = value;
   saveState();
-  // note: we don't re-render here or the input would lose focus mid-typing
 }
-
 function updateExerciseNotes(i, v) {
   state.currentSession.exercises[i].notes = v;
   saveState();
 }
 
-// =====================================================================
-// AUTOCOMPLETE for exercise names
-// Pull unique names from both templates and history
-// =====================================================================
 function allKnownExerciseNames() {
   const set = new Set();
   state.templates.forEach(t => (t.exercises || []).forEach(e => e.name && set.add(e.name)));
   state.history.forEach(s => (s.exercises || []).forEach(e => e.name && set.add(e.name)));
   return Array.from(set).sort();
 }
-
 function wireAutocomplete(i) {
   const input = document.getElementById(`ex-name-${i}`);
   const list = document.getElementById(`ac-list-${i}`);
   if (!input) return;
-
   function updateList() {
     const q = input.value.trim().toLowerCase();
     const names = allKnownExerciseNames().filter(n => q && n.toLowerCase().includes(q) && n.toLowerCase() !== q);
@@ -746,30 +893,24 @@ function wireAutocomplete(i) {
     list.style.display = 'block';
     list.innerHTML = names.slice(0, 8).map(n => `<div class="autocomplete-item" onmousedown="pickName(${i},'${escapeJs(n)}')">${escapeHtml(n)}</div>`).join('');
   }
-
   input.addEventListener('input', () => {
     state.currentSession.exercises[i].name = input.value;
-    saveState();
-    updateList();
+    saveState(); updateList();
   });
   input.addEventListener('focus', updateList);
   input.addEventListener('blur', () => { setTimeout(() => list.style.display = 'none', 150); });
 }
-
 function pickName(i, name) {
   state.currentSession.exercises[i].name = name;
-  saveState();
-  renderExercises();
+  saveState(); renderExercises();
 }
 
-// =====================================================================
-// LAST SESSION LOOKUP (for target-to-beat hints)
-// Finds the most recent prior entry for an exercise by name
-// =====================================================================
 function findLastExerciseData(exerciseName) {
   if (!exerciseName) return null;
   const nameLower = exerciseName.toLowerCase();
-  for (const session of state.history) {
+  for (let i = 0; i < state.history.length; i++) {
+    if (i === state.editingHistoryIndex) continue;
+    const session = state.history[i];
     if (session.type !== 'lifts') continue;
     for (const ex of (session.exercises || [])) {
       if ((ex.name || '').toLowerCase() === nameLower) return ex;
@@ -777,72 +918,60 @@ function findLastExerciseData(exerciseName) {
   }
   return null;
 }
-
 function summarizeExerciseText(ex) {
   return (ex.sets || []).map(s => {
     if (s.type === 'warmup') return `${s.weight||'-'}x${s.reps||'-'}wu`;
-    if (s.type === 'working') return `${s.weight||'-'}x${s.reps||'-'}${s.rpe?'@'+s.rpe:''}`;
-    if (s.type === 'myorep') return `${s.weight||'-'}×[${s.sequence||'-'}]`;
+    if (s.type === 'working') {
+      let extra = '';
+      if (s.rpe) extra = `@RPE${s.rpe}`;
+      else if (s.rir) extra = `@RIR${s.rir}`;
+      return `${s.weight||'-'}x${s.reps||'-'}${extra}`;
+    }
+    if (s.type === 'myorep') return `myo: ${s.sequence||'-'}`;
     if (s.type === 'drop') return `drop: ${s.sequence||'-'}`;
   }).join(' · ');
 }
 
-// =====================================================================
-// TEMPLATES
-// =====================================================================
-
 function saveCurrentAsTemplate() {
   const name = prompt('Template name?', state.currentSession.name || 'New Template');
   if (!name) return;
-  // copy exercises but strip the logged values - keep just names and set structure
   const tplExercises = state.currentSession.exercises.map(ex => ({
     name: ex.name,
-    sets: ex.sets.map(s => {
-      const copy = { type: s.type };
-      // keep structure (type) but blank out actual numbers so user logs fresh
-      return copy;
-    }),
+    sets: ex.sets.map(s => ({ type: s.type })),
     notes: ''
   }));
   state.templates.push({ name, type: state.currentSession.type, exercises: tplExercises });
-  saveState();
-  alert('Template saved.');
-  renderTemplates();
+  saveState(); alert('Template saved.'); renderTemplates();
 }
-
 function loadTemplateIntoSession() {
   const idx = document.getElementById('template-picker').value;
   if (idx === '') return;
   const tpl = state.templates[parseInt(idx)];
   if (!tpl) return;
   if (state.currentSession.exercises.length > 0 && !confirm('Replace current exercises with template?')) return;
-  // deep copy so editing the session doesn't mutate the template
   state.currentSession.type = tpl.type;
   state.currentSession.name = state.currentSession.name || tpl.name;
   state.currentSession.exercises = tpl.exercises.map(ex => ({
     name: ex.name,
-    sets: (ex.sets || []).map(s => ({ type: s.type })), // blank values, keep types
+    sets: (ex.sets || []).map(s => ({ type: s.type })),
     notes: ''
   }));
   document.getElementById('session-type').value = tpl.type;
   document.getElementById('session-name').value = state.currentSession.name;
-  saveState();
-  onSessionTypeChange();
-  // reset picker so user can re-load if needed
+  saveState(); onSessionTypeChange();
   document.getElementById('template-picker').value = '';
 }
-
 function renderTemplates() {
   const c = document.getElementById('templates-list');
   if (state.templates.length === 0) {
-    c.innerHTML = '<p class="muted">No templates yet. Build a session on the Log tab and click "Save as Template".</p>';
+    c.innerHTML = '<div class="card"><p class="muted">No templates yet. Build a session on Log and tap "Save as Template".</p></div>';
     return;
   }
   c.innerHTML = state.templates.map((t, i) => `
-    <div class="panel">
-      <div class="header-row">
+    <div class="card">
+      <div class="header-row" style="margin-bottom:8px">
         <h3>${escapeHtml(t.name)} <span class="tag">${t.type}</span></h3>
-        <div>
+        <div class="btn-group">
           <button class="btn-small" onclick="renameTemplate(${i})">Rename</button>
           <button class="btn-danger" onclick="deleteTemplate(${i})">Delete</button>
         </div>
@@ -851,51 +980,60 @@ function renderTemplates() {
     </div>
   `).join('');
 }
-
 function renameTemplate(i) {
   const name = prompt('New name?', state.templates[i].name);
   if (!name) return;
   state.templates[i].name = name;
-  saveState();
-  renderTemplates();
+  saveState(); renderTemplates();
 }
-
 function deleteTemplate(i) {
   if (!confirm('Delete this template?')) return;
   state.templates.splice(i, 1);
-  saveState();
-  renderTemplates();
+  saveState(); renderTemplates();
 }
 
-// =====================================================================
-// SAVE SESSION TO HISTORY
-// =====================================================================
 function saveSessionToHistory() {
   const s = state.currentSession;
   if (s.type === 'lifts' && s.exercises.length === 0) {
     if (!confirm('No exercises logged. Save anyway?')) return;
   }
-  // push a deep copy to history (so the current session can be cleared independently)
-  state.history.unshift(JSON.parse(JSON.stringify(s)));
+  if (state.editingHistoryIndex !== null) {
+    state.history[state.editingHistoryIndex] = JSON.parse(JSON.stringify(s));
+    state.editingHistoryIndex = null;
+    alert('Session updated.');
+  } else {
+    state.history.unshift(JSON.parse(JSON.stringify(s)));
+    alert('Session saved.');
+  }
   state.currentSession = emptySession();
-  saveState();
-  alert('Session saved to history.');
-  renderLog();
+  saveState(); renderLog();
 }
-
 function clearSession() {
-  if (!confirm('Clear the current session without saving?')) return;
+  if (state.editingHistoryIndex !== null) {
+    if (!confirm('You are editing a saved session. Clear the form without saving changes?')) return;
+    state.editingHistoryIndex = null;
+  } else {
+    if (!confirm('Clear current session without saving?')) return;
+  }
   state.currentSession = emptySession();
-  saveState();
-  renderLog();
+  saveState(); renderLog();
 }
-
-// =====================================================================
-// HISTORY
-// =====================================================================
+function editHistorySession(idx) {
+  if (state.currentSession.exercises.length > 0 || state.currentSession.notes) {
+    if (!confirm('You have an unsaved current session. Discard it and edit this one?')) return;
+  }
+  state.editingHistoryIndex = idx;
+  state.currentSession = JSON.parse(JSON.stringify(state.history[idx]));
+  saveState();
+  document.querySelectorAll('nav.bottom-tabs button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelector('nav.bottom-tabs button[data-screen="log"]').classList.add('active');
+  document.getElementById('screen-log').classList.add('active');
+  renderLog();
+  window.scrollTo(0,0);
+}
 
 function renderHistory() {
-  // populate phase filter
   const filterEl = document.getElementById('history-filter');
   const phases = Array.from(new Set(state.history.map(s => s.phase).filter(Boolean))).sort();
   const currentFilter = filterEl.value;
@@ -903,32 +1041,41 @@ function renderHistory() {
     phases.map(p => `<option value="${escapeHtml(p)}" ${p===currentFilter?'selected':''}>${escapeHtml(p)}</option>`).join('');
 
   const c = document.getElementById('history-list');
-  const filtered = currentFilter
-    ? state.history.filter(s => s.phase === currentFilter)
-    : state.history;
-
+  const filtered = currentFilter ? state.history.filter(s => s.phase === currentFilter) : state.history;
   if (filtered.length === 0) {
-    c.innerHTML = '<p class="muted">No sessions yet.</p>';
+    c.innerHTML = '<div class="card"><p class="muted">No sessions yet.</p></div>';
     return;
   }
-  c.innerHTML = filtered.map((s, i) => {
-    const duration = (s.startTime && s.endTime) ? ` • ${s.startTime}–${s.endTime}` : '';
-    const bw = s.bodyweight ? ` • ${s.bodyweight} lb` : '';
+  c.innerHTML = filtered.map(s => {
+    const realIdx = state.history.indexOf(s);
+    const meta = formatSessionMeta(s);
     return `
-      <div class="session-card ${s.type}">
-        <div class="header-row">
+      <div class="session-card ${s.type}" onclick="editHistorySession(${realIdx})">
+        <div class="header-row" style="margin-bottom:4px">
           <h3>${escapeHtml(s.date)} ${escapeHtml(s.name || '(unnamed)')}
             <span class="tag">${s.type}</span>
             ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
           </h3>
-          <button class="btn-danger" onclick="deleteHistory(${state.history.indexOf(s)})">Delete</button>
+          <button class="btn-danger" onclick="event.stopPropagation(); deleteHistory(${realIdx})">Delete</button>
         </div>
-        <p class="muted">${escapeHtml(duration + bw)}</p>
+        ${meta ? `<div class="session-meta">${escapeHtml(meta)}</div>` : ''}
         <pre>${escapeHtml(summarizeSessionText(s))}</pre>
       </div>`;
   }).join('');
 }
-
+function formatTime(t) {
+  if (!t || settings.timeFormat === '24') return t || '';
+  const [h, m] = t.split(':').map(Number);
+  if (isNaN(h)) return t;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+}
+function formatSessionMeta(s) {
+  const duration = (s.startTime && s.endTime) ? `${formatTime(s.startTime)}–${formatTime(s.endTime)}` : '';
+  const bw = s.bodyweight ? `${s.bodyweight} ${settings.units}` : '';
+  return [duration, bw].filter(Boolean).join(' · ');
+}
 function summarizeSessionText(s) {
   let out = '';
   if (s.type === 'lifts') {
@@ -947,27 +1094,52 @@ function summarizeSessionText(s) {
   if (s.notes) out += `\n\nsession notes: ${s.notes}`;
   return out;
 }
-
 function deleteHistory(i) {
   if (!confirm('Delete this session permanently?')) return;
   state.history.splice(i, 1);
-  saveState();
-  renderHistory();
+  if (state.editingHistoryIndex === i) {
+    state.editingHistoryIndex = null;
+    state.currentSession = emptySession();
+  } else if (state.editingHistoryIndex !== null && i < state.editingHistoryIndex) {
+    state.editingHistoryIndex--;
+  }
+  saveState(); renderHistory();
 }
 
-// =====================================================================
-// IMPORT / EXPORT
-// =====================================================================
+function renderSettings() {
+  document.getElementById('set-theme').value = settings.theme;
+  document.getElementById('set-timeformat').value = settings.timeFormat;
+  document.getElementById('set-units').value = settings.units;
+  document.getElementById('set-intensity').value = settings.intensity;
+  document.getElementById('set-defaultphase').value = settings.defaultPhase || '';
+}
+function updateSetting(key, value) { settings[key] = value; saveSettings(); }
+function nukeAllData() {
+  const confirm1 = prompt('This permanently deletes ALL data. Type DELETE (all caps) to confirm:');
+  if (confirm1 !== 'DELETE') { alert('Cancelled.'); return; }
+  localStorage.removeItem(STORAGE_KEY);
+  state = { templates: [], history: [], currentSession: emptySession(), editingHistoryIndex: null };
+  alert('All data deleted.');
+  renderLog(); renderHistory(); renderTemplates();
+}
+
 function exportData() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const payload = {
+    schemaVersion: SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    settings: settings,
+    templates: state.templates,
+    history: state.history,
+    currentSession: state.currentSession
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `hybrid-trainer-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `hybrid-trainer-backup-v${SCHEMA_VERSION}-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
-
 function importData() {
   const input = document.createElement('input');
   input.type = 'file';
@@ -979,36 +1151,50 @@ function importData() {
     reader.onload = ev => {
       try {
         const imported = JSON.parse(ev.target.result);
-        if (confirm('Replace ALL current data with imported file? (export first if unsure)')) {
-          state = imported;
-          if (!state.currentSession) state.currentSession = emptySession();
-          saveState();
-          renderLog();
+        let toImport;
+        if (imported.schemaVersion !== undefined) {
+          toImport = {
+            templates: imported.templates || [],
+            history: imported.history || [],
+            currentSession: imported.currentSession || emptySession()
+          };
+          if (imported.settings && confirm('This file includes settings. Import settings too?')) {
+            Object.assign(settings, imported.settings);
+            saveSettings();
+          }
+        } else if (imported.templates !== undefined || imported.history !== undefined) {
+          toImport = {
+            templates: imported.templates || [],
+            history: imported.history || [],
+            currentSession: imported.currentSession || emptySession()
+          };
+        } else {
+          alert('Unrecognized file format.');
+          return;
         }
-      } catch (err) { alert('Invalid JSON file.'); }
+        if (confirm('Replace ALL current data with the imported file?')) {
+          state.templates = toImport.templates;
+          state.history = toImport.history;
+          state.currentSession = toImport.currentSession;
+          state.editingHistoryIndex = null;
+          saveState(); renderLog();
+          alert('Import successful.');
+        }
+      } catch (err) { alert('Invalid JSON file: ' + err.message); }
     };
     reader.readAsText(file);
   };
   input.click();
 }
 
-// =====================================================================
-// UTIL
-// =====================================================================
 function escapeHtml(str) {
   if (str === undefined || str === null) return '';
-  return String(str)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
-function escapeJs(str) {
-  return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-}
+function escapeJs(str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
-// =====================================================================
-// BOOT
-// =====================================================================
 loadState();
+applyTheme();
 renderLog();
 </script>
 </body>
