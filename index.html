@@ -1,20 +1,17 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.7
-  Single-file web app. Read SCHEMA.md in the repo for data structure.
+  HYBRID TRAINER v0.8
+  Single-file web app (+ Chart.js from CDN for the Stats tab).
+  Read SCHEMA.md in the repo for data structure.
 
-  What's new vs v0.6:
-    A1. iPhone Mini CSS fixes (Today button, input-with-button layout)
-    A2. History sort toggle (newest/oldest first)
-    A3. History filters: type, name search, date range (combine with phase filter)
-    B1. Distance unit setting (mi/km) in Settings
-    B2. Pace unit auto-pairs with distance; field labels show units
-    D1. Format validation: red border on bad time/HR/RPE/pace values (no blocking)
-    D2. Pre-submit warnings for missing common fields
-    D3. Cross-field sanity (splits sum, pace×time≈distance)
-    D4. Cross-day session support: optional endDate field
-    Schema bumped to 7 (backwards-compatible)
+  What's new vs v0.7:
+    - New "Stats" tab with 5 charts: bodyweight, exercise progression,
+      estimated 1RM, run pace trend, weekly volume (uses Chart.js)
+    - End date is now behind an "Ended on a different day" checkbox
+      instead of auto-appearing when an end time is entered
+    - Fixed mobile input overflow (boxes spilling past card edge)
 
+  Schema unchanged from v7 (still 7). Charts read existing data, no new fields.
   Data: localStorage key 'hybridTrainerV2'. Settings: 'hybridTrainerSettings'.
 -->
 <html lang="en">
@@ -24,6 +21,7 @@
 <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Hybrid Trainer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
     --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --surface-3: #e8e8eb;
@@ -309,6 +307,16 @@
   .setting-label .title { font-size: 0.95rem; font-weight: 500; }
   .setting-label .desc { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
   .setting-control { flex: 0 0 auto; min-width: 130px; max-width: 180px; }
+  /* Stats / charts */
+  .chart-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
+    box-shadow: var(--shadow-sm);
+  }
+  .chart-card h3 { margin-bottom: 4px; }
+  .chart-card .chart-sub { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px; }
+  .chart-wrap { position: relative; height: 240px; width: 100%; }
+  .chart-picker { margin-bottom: 12px; }
   @supports (padding: env(safe-area-inset-bottom)) {
     body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
@@ -319,6 +327,9 @@
     /* Stack form rows vertically so fields never overlap or clip buttons */
     .row { flex-direction: column; gap: 10px; }
     .row .field { min-width: 0; width: 100%; }
+    /* Make sure inputs never exceed their container (fixes overflow past card edge) */
+    input, select, textarea { max-width: 100%; }
+    .card { overflow: hidden; }
     /* Settings rows: let the control breathe */
     .setting-control { min-width: 110px; max-width: 150px; }
     /* Keep the date + Today button on one line, never wrap */
@@ -336,7 +347,7 @@
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.7</small>
+    <small>v0.8</small>
   </div>
   <div class="header-actions">
     <button class="btn-small" onclick="exportData()">Export</button>
@@ -373,9 +384,15 @@
         <label>End</label>
         <input type="time" id="session-end">
       </div>
-      <div class="field" id="session-enddate-field">
+    </div>
+    <div id="crossday-wrap" style="margin-bottom:10px">
+      <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-size:0.85rem; cursor:pointer;">
+        <input type="checkbox" id="crossday-checkbox" style="width:auto; margin:0;" onchange="toggleCrossDay(this.checked)">
+        Ended on a different day
+      </label>
+      <div class="field" id="session-enddate-field" style="display:none; margin-top:8px;">
         <label>End date</label>
-        <input type="date" id="session-enddate" title="Leave blank if ended same day">
+        <input type="date" id="session-enddate">
       </div>
     </div>
     <div class="row">
@@ -474,6 +491,11 @@
   <div id="history-list"></div>
 </section>
 
+<section id="screen-stats" class="screen">
+  <h2>Stats</h2>
+  <div id="stats-content"></div>
+</section>
+
 <section id="screen-settings" class="screen">
   <h2>Settings</h2>
   <div class="card">
@@ -566,7 +588,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.7 · single-file web app · data lives in this browser's localStorage</small>
+    <small>v0.8 · single-file web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -582,6 +604,10 @@
   <button data-screen="history">
     <span class="tab-icon">⊟</span>
     <span>History</span>
+  </button>
+  <button data-screen="stats">
+    <span class="tab-icon">◔</span>
+    <span>Stats</span>
   </button>
   <button data-screen="settings">
     <span class="tab-icon">⚙</span>
@@ -801,6 +827,7 @@ document.querySelectorAll('nav.bottom-tabs button').forEach(btn => {
     if (btn.dataset.screen === 'log') renderLog();
     if (btn.dataset.screen === 'templates') renderTemplates();
     if (btn.dataset.screen === 'history') renderHistory();
+    if (btn.dataset.screen === 'stats') renderStats();
     if (btn.dataset.screen === 'settings') renderSettings();
     window.scrollTo(0, 0);
   });
@@ -818,6 +845,7 @@ function renderLog() {
   document.getElementById('session-start').value = s.startTime || '';
   document.getElementById('session-end').value = s.endTime || '';
   document.getElementById('session-enddate').value = s.endDate || '';
+  document.getElementById('crossday-checkbox').checked = !!s.endDate;
   document.getElementById('session-type').value = s.type;
   document.getElementById('session-phase').value = s.phase || '';
   document.getElementById('session-name').value = s.name || '';
@@ -872,15 +900,42 @@ function syncSessionFromForm() {
   s.name = document.getElementById('session-name').value;
   s.notes = document.getElementById('session-notes').value;
   saveState();
-  updateEndDateVisibility();
+  updateCrossDayVisibility();
 }
-// Show End date field only when there's an end time (and the session type uses end time)
-function updateEndDateVisibility() {
+// The "ended on a different day" checkbox controls whether the end date field shows.
+// The whole cross-day block is only relevant for non-run sessions that have an end time.
+function updateCrossDayVisibility() {
   const type = state.currentSession.type;
   const endTime = document.getElementById('session-end').value;
-  const endDateField = document.getElementById('session-enddate-field');
-  const show = (type !== 'run') && !!endTime;
-  endDateField.style.display = show ? 'block' : 'none';
+  const wrap = document.getElementById('crossday-wrap');
+  const field = document.getElementById('session-enddate-field');
+  const checkbox = document.getElementById('crossday-checkbox');
+
+  // Only show the checkbox option when there's an end time on a non-run session
+  const relevant = (type !== 'run') && !!endTime;
+  wrap.style.display = relevant ? 'block' : 'none';
+
+  if (!relevant) {
+    field.style.display = 'none';
+    return;
+  }
+  // If session already has an endDate stored, keep the box checked and field shown
+  if (state.currentSession.endDate) {
+    checkbox.checked = true;
+    field.style.display = 'block';
+  } else {
+    field.style.display = checkbox.checked ? 'block' : 'none';
+  }
+}
+function toggleCrossDay(checked) {
+  const field = document.getElementById('session-enddate-field');
+  field.style.display = checked ? 'block' : 'none';
+  if (!checked) {
+    // clearing the checkbox clears any stored end date
+    state.currentSession.endDate = '';
+    document.getElementById('session-enddate').value = '';
+    saveState();
+  }
 }
 // Guard function: warns before switching session type if there is data
 // that would be hidden by the switch. Called by the type dropdown.
@@ -928,7 +983,7 @@ function onSessionTypeChange() {
   // Keep start time on all session types. Hide end time only on runs.
   document.getElementById('session-time-row').style.display = 'flex';
   document.getElementById('session-end-field').style.display = (type === 'run') ? 'none' : 'block';
-  updateEndDateVisibility();
+  updateCrossDayVisibility();
   const area = document.getElementById('exercises-area');
   if (type === 'lifts') { renderExercises(); }
   else if (type === 'run') { renderRunForm(); }
@@ -1595,6 +1650,286 @@ function deleteHistory(i) {
   }
   saveState(); renderHistory();
 }
+
+// =====================================================================
+// STATS / CHARTS
+// Uses Chart.js (loaded from CDN). All charts read from state.history.
+// =====================================================================
+let _chartInstances = [];
+
+function destroyCharts() {
+  _chartInstances.forEach(c => { try { c.destroy(); } catch(e){} });
+  _chartInstances = [];
+}
+
+function chartColors() {
+  const cs = getComputedStyle(document.documentElement);
+  return {
+    accent: cs.getPropertyValue('--accent').trim() || '#f59e0b',
+    info: cs.getPropertyValue('--info').trim() || '#2563eb',
+    success: cs.getPropertyValue('--success').trim() || '#16a34a',
+    text: cs.getPropertyValue('--text-muted').trim() || '#71717a',
+    grid: cs.getPropertyValue('--border').trim() || '#e4e4e7'
+  };
+}
+
+function baseLineOptions(colors, yLabel, opts) {
+  opts = opts || {};
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { intersect: false, mode: 'index' },
+    plugins: {
+      legend: { display: opts.legend || false, labels: { color: colors.text } },
+      tooltip: { enabled: true }
+    },
+    scales: {
+      x: { ticks: { color: colors.text, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+           grid: { color: colors.grid } },
+      y: { ticks: { color: colors.text }, grid: { color: colors.grid },
+           title: { display: !!yLabel, text: yLabel, color: colors.text },
+           reverse: !!opts.reverseY }
+    }
+  };
+}
+
+function epley1RM(weight, reps) {
+  const w = Number(weight), r = Number(reps);
+  if (!Number.isFinite(w) || !Number.isFinite(r) || w <= 0 || r <= 0) return null;
+  return w * (1 + r / 30);
+}
+
+function bestSetForExercise(session, exName) {
+  if (session.type !== 'lifts') return null;
+  let best = null;
+  for (const ex of (session.exercises || [])) {
+    if ((ex.name || '').toLowerCase() !== exName.toLowerCase()) continue;
+    for (const set of (ex.sets || [])) {
+      if (set.type !== 'working') continue;
+      const w = Number(set.weight);
+      const r = Number(set.reps);
+      if (!Number.isFinite(w) || !Number.isFinite(r)) continue;
+      const e = epley1RM(w, r);
+      if (!best || (e !== null && e > best.best1RM)) {
+        best = { topWeight: w, topReps: r, best1RM: e || 0 };
+      }
+    }
+  }
+  return best;
+}
+
+function loggedExerciseNames() {
+  const set = new Set();
+  state.history.forEach(s => {
+    if (s.type === 'lifts') (s.exercises || []).forEach(e => e.name && set.add(e.name));
+  });
+  return Array.from(set).sort();
+}
+
+function paceToSeconds(p) {
+  if (!p) return null;
+  const cleaned = String(p).split('/')[0].trim();
+  const m = cleaned.match(/^(\d+):(\d{1,2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+function secondsToPace(s) {
+  const mm = Math.floor(s / 60);
+  const ss = Math.round(s % 60);
+  return mm + ':' + String(ss).padStart(2, '0');
+}
+
+function renderStats() {
+  destroyCharts();
+  const container = document.getElementById('stats-content');
+
+  if (typeof Chart === 'undefined') {
+    container.innerHTML = '<div class="card"><p class="muted">Charts need an internet connection to load the charting library. Reconnect and reopen this tab.</p></div>';
+    return;
+  }
+  if (state.history.length === 0) {
+    container.innerHTML = '<div class="card"><p class="muted">No data yet. Log some sessions and your charts will appear here.</p></div>';
+    return;
+  }
+
+  const exNames = loggedExerciseNames();
+  if (!renderStats._pickedExercise || !exNames.includes(renderStats._pickedExercise)) {
+    renderStats._pickedExercise = exNames[0] || '';
+  }
+  const runTypeKeys = Object.keys(RUN_TYPES);
+  if (!renderStats._pickedRunType) renderStats._pickedRunType = 'easy';
+
+  container.innerHTML =
+    '<div class="chart-card">' +
+      '<h3>Bodyweight</h3>' +
+      '<div class="chart-sub">From sessions where you logged bodyweight</div>' +
+      '<div class="chart-wrap"><canvas id="chart-bw"></canvas></div>' +
+    '</div>' +
+    '<div class="chart-card">' +
+      '<h3>Exercise progression</h3>' +
+      '<div class="chart-sub">Top working set weight over time</div>' +
+      '<div class="chart-picker"><select id="stats-exercise-picker" onchange="onStatsExerciseChange(this.value)">' +
+        exNames.map(n => '<option value="' + escapeHtml(n) + '"' + (n===renderStats._pickedExercise?' selected':'') + '>' + escapeHtml(n) + '</option>').join('') +
+      '</select></div>' +
+      '<div class="chart-wrap"><canvas id="chart-exercise"></canvas></div>' +
+    '</div>' +
+    '<div class="chart-card">' +
+      '<h3>Estimated 1RM</h3>' +
+      '<div class="chart-sub">Epley formula on your best working set (same exercise as above)</div>' +
+      '<div class="chart-wrap"><canvas id="chart-1rm"></canvas></div>' +
+    '</div>' +
+    '<div class="chart-card">' +
+      '<h3>Run pace trend</h3>' +
+      '<div class="chart-sub">Lower is faster. Pace per ' + settings.distanceUnit + '.</div>' +
+      '<div class="chart-picker"><select id="stats-runtype-picker" onchange="onStatsRunTypeChange(this.value)">' +
+        runTypeKeys.map(k => '<option value="' + k + '"' + (k===renderStats._pickedRunType?' selected':'') + '>' + escapeHtml(RUN_TYPES[k].name) + '</option>').join('') +
+      '</select></div>' +
+      '<div class="chart-wrap"><canvas id="chart-pace"></canvas></div>' +
+    '</div>' +
+    '<div class="chart-card">' +
+      '<h3>Weekly volume</h3>' +
+      '<div class="chart-sub">Sessions per week by type</div>' +
+      '<div class="chart-wrap"><canvas id="chart-volume"></canvas></div>' +
+    '</div>';
+
+  drawBodyweightChart();
+  drawExerciseChart(renderStats._pickedExercise);
+  draw1RMChart(renderStats._pickedExercise);
+  drawPaceChart(renderStats._pickedRunType);
+  drawVolumeChart();
+}
+
+function onStatsExerciseChange(name) {
+  renderStats._pickedExercise = name;
+  drawExerciseChart(name);
+  draw1RMChart(name);
+}
+function onStatsRunTypeChange(rt) {
+  renderStats._pickedRunType = rt;
+  drawPaceChart(rt);
+}
+
+function drawBodyweightChart() {
+  const colors = chartColors();
+  const rows = state.history
+    .filter(s => s.bodyweight && Number(s.bodyweight) > 0)
+    .map(s => ({ date: s.date, bw: Number(s.bodyweight) }))
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  const ctx = document.getElementById('chart-bw');
+  if (rows.length === 0) { noData(ctx); return; }
+  _chartInstances.push(new Chart(ctx, {
+    type: 'line',
+    data: { labels: rows.map(r => r.date.slice(5)),
+      datasets: [{ data: rows.map(r => r.bw), borderColor: colors.accent, backgroundColor: colors.accent, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
+    options: baseLineOptions(colors, settings.units)
+  }));
+}
+
+function drawExerciseChart(exName) {
+  const colors = chartColors();
+  const ctx = document.getElementById('chart-exercise');
+  if (!exName) { noData(ctx); return; }
+  const rows = state.history
+    .filter(s => s.type === 'lifts')
+    .map(s => ({ date: s.date, best: bestSetForExercise(s, exName) }))
+    .filter(r => r.best && r.best.topWeight > 0)
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  if (rows.length === 0) { noData(ctx); return; }
+  _chartInstances.push(new Chart(ctx, {
+    type: 'line',
+    data: { labels: rows.map(r => r.date.slice(5)),
+      datasets: [{ label: exName + ' top set', data: rows.map(r => r.best.topWeight),
+        borderColor: colors.accent, backgroundColor: colors.accent, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
+    options: Object.assign({}, baseLineOptions(colors, settings.units), {
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { afterLabel: (item) => rows[item.dataIndex].best.topWeight + ' x ' + rows[item.dataIndex].best.topReps } } }
+    })
+  }));
+}
+
+function draw1RMChart(exName) {
+  const colors = chartColors();
+  const ctx = document.getElementById('chart-1rm');
+  if (!exName) { noData(ctx); return; }
+  const rows = state.history
+    .filter(s => s.type === 'lifts')
+    .map(s => ({ date: s.date, best: bestSetForExercise(s, exName) }))
+    .filter(r => r.best && r.best.best1RM > 0)
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  if (rows.length === 0) { noData(ctx); return; }
+  _chartInstances.push(new Chart(ctx, {
+    type: 'line',
+    data: { labels: rows.map(r => r.date.slice(5)),
+      datasets: [{ data: rows.map(r => Math.round(r.best.best1RM)),
+        borderColor: colors.info, backgroundColor: colors.info, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
+    options: baseLineOptions(colors, 'est 1RM (' + settings.units + ')')
+  }));
+}
+
+function drawPaceChart(runType) {
+  const colors = chartColors();
+  const ctx = document.getElementById('chart-pace');
+  const rows = state.history
+    .filter(s => s.type === 'run' && s.runData && s.runData.runType === runType)
+    .map(s => ({ date: s.date, pace: paceToSeconds(s.runData.pace) }))
+    .filter(r => r.pace !== null)
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  if (rows.length === 0) { noData(ctx); return; }
+  const opts = baseLineOptions(colors, 'pace (min/' + settings.distanceUnit + ')', { reverseY: true });
+  opts.scales.y.ticks.callback = (v) => secondsToPace(v);
+  opts.plugins = { legend: { display: false },
+    tooltip: { callbacks: { label: (item) => secondsToPace(item.parsed.y) + '/' + settings.distanceUnit } } };
+  _chartInstances.push(new Chart(ctx, {
+    type: 'line',
+    data: { labels: rows.map(r => r.date.slice(5)),
+      datasets: [{ data: rows.map(r => r.pace), borderColor: colors.success, backgroundColor: colors.success, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
+    options: opts
+  }));
+}
+
+function drawVolumeChart() {
+  const colors = chartColors();
+  const ctx = document.getElementById('chart-volume');
+  function weekStart(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    const day = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - day);
+    return d.toISOString().slice(0, 10);
+  }
+  const weeks = {};
+  state.history.forEach(s => {
+    const wk = weekStart(s.date);
+    if (!weeks[wk]) weeks[wk] = { lifts: 0, run: 0, conditioning: 0 };
+    if (weeks[wk][s.type] !== undefined) weeks[wk][s.type]++;
+  });
+  const weekKeys = Object.keys(weeks).sort();
+  if (weekKeys.length === 0) { noData(ctx); return; }
+  _chartInstances.push(new Chart(ctx, {
+    type: 'bar',
+    data: { labels: weekKeys.map(w => w.slice(5)),
+      datasets: [
+        { label: 'Lifts', data: weekKeys.map(w => weeks[w].lifts), backgroundColor: colors.accent },
+        { label: 'Run', data: weekKeys.map(w => weeks[w].run), backgroundColor: colors.success },
+        { label: 'Conditioning', data: weekKeys.map(w => weeks[w].conditioning), backgroundColor: colors.info }
+      ] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { color: colors.text } } },
+      scales: {
+        x: { stacked: true, ticks: { color: colors.text }, grid: { color: colors.grid } },
+        y: { stacked: true, ticks: { color: colors.text, stepSize: 1 }, grid: { color: colors.grid },
+             title: { display: true, text: 'sessions', color: colors.text } }
+      }
+    }
+  }));
+}
+
+function noData(canvas) {
+  if (!canvas) return;
+  const wrap = canvas.parentElement;
+  wrap.innerHTML = '<p class="muted" style="text-align:center; padding-top:90px;">Not enough data yet for this chart.</p>';
+}
+
 
 function renderSettings() {
   document.getElementById('set-theme').value = settings.theme;
