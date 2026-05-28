@@ -1,13 +1,19 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.5
+  HYBRID TRAINER v0.7
   Single-file web app. Read SCHEMA.md in the repo for data structure.
 
-  What's new vs v0.4:
-    - Run sessions now have a "Run type" selector
-    - Five types: Easy, Tempo, Intervals, Long, Race
-    - Fields shown depend on the type (no more RPE on intervals/race, etc.)
-    - Backwards compatible: old run data without runType defaults to Easy
+  What's new vs v0.6:
+    A1. iPhone Mini CSS fixes (Today button, input-with-button layout)
+    A2. History sort toggle (newest/oldest first)
+    A3. History filters: type, name search, date range (combine with phase filter)
+    B1. Distance unit setting (mi/km) in Settings
+    B2. Pace unit auto-pairs with distance; field labels show units
+    D1. Format validation: red border on bad time/HR/RPE/pace values (no blocking)
+    D2. Pre-submit warnings for missing common fields
+    D3. Cross-field sanity (splits sum, pace×time≈distance)
+    D4. Cross-day session support: optional endDate field
+    Schema bumped to 7 (backwards-compatible)
 
   Data: localStorage key 'hybridTrainerV2'. Settings: 'hybridTrainerSettings'.
 -->
@@ -117,6 +123,14 @@
     outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
   }
+  input.invalid, textarea.invalid {
+    border-color: var(--danger);
+    background: rgba(220, 38, 38, 0.05);
+  }
+  input.invalid:focus, textarea.invalid:focus {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+  }
   input::placeholder { color: var(--text-dim); }
   textarea { min-height: 60px; resize: vertical; }
   label {
@@ -126,9 +140,10 @@
   }
   .field { margin-bottom: 10px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .row .field { flex: 1; min-width: 120px; margin-bottom: 0; }
-  .input-with-button { display: flex; gap: 6px; }
-  .input-with-button input { flex: 1; }
+  .row .field { flex: 1; min-width: 140px; margin-bottom: 0; }
+  .input-with-button { display: flex; gap: 6px; align-items: stretch; }
+  .input-with-button input { flex: 1; min-width: 0; }
+  .input-with-button button { flex-shrink: 0; white-space: nowrap; }
   button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
   .btn {
     background: var(--accent); color: var(--accent-text);
@@ -297,6 +312,23 @@
   @supports (padding: env(safe-area-inset-bottom)) {
     body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
+
+  /* Narrow screens (iPhone Mini = 375pt, and smaller) */
+  @media (max-width: 400px) {
+    body { padding-left: 12px; padding-right: 12px; }
+    /* Stack form rows vertically so fields never overlap or clip buttons */
+    .row { flex-direction: column; gap: 10px; }
+    .row .field { min-width: 0; width: 100%; }
+    /* Settings rows: let the control breathe */
+    .setting-control { min-width: 110px; max-width: 150px; }
+    /* Keep the date + Today button on one line, never wrap */
+    .input-with-button { flex-wrap: nowrap; }
+    /* Slightly smaller FAB so it doesn't cover content as much */
+    .fab { width: 52px; height: 52px; bottom: calc(72px + env(safe-area-inset-bottom)); }
+    /* Add-set buttons can wrap to two rows comfortably */
+    .add-set-buttons button { min-width: 64px; }
+    h1 { font-size: 1.3rem; }
+  }
 </style>
 </head>
 <body>
@@ -304,7 +336,7 @@
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.5</small>
+    <small>v0.7</small>
   </div>
   <div class="header-actions">
     <button class="btn-small" onclick="exportData()">Export</button>
@@ -332,20 +364,24 @@
         <input type="number" step="0.01" inputmode="decimal" id="session-bw" placeholder="lb">
       </div>
     </div>
-    <div class="row">
+    <div class="row" id="session-time-row">
       <div class="field">
         <label>Start</label>
         <input type="time" id="session-start">
       </div>
-      <div class="field">
+      <div class="field" id="session-end-field">
         <label>End</label>
         <input type="time" id="session-end">
+      </div>
+      <div class="field" id="session-enddate-field">
+        <label>End date</label>
+        <input type="date" id="session-enddate" title="Leave blank if ended same day">
       </div>
     </div>
     <div class="row">
       <div class="field">
         <label>Type</label>
-        <select id="session-type" onchange="onSessionTypeChange()">
+        <select id="session-type" onchange="onSessionTypeChangeRequest(this)">
           <option value="lifts">Lifts</option>
           <option value="run">Run</option>
           <option value="conditioning">Conditioning</option>
@@ -394,11 +430,44 @@
 <section id="screen-history" class="screen">
   <h2>History</h2>
   <div class="card compact">
-    <div class="field" style="margin-bottom:0">
-      <label>Filter by phase</label>
-      <select id="history-filter" onchange="renderHistory()">
-        <option value="">all</option>
-      </select>
+    <div class="row">
+      <div class="field">
+        <label>Sort</label>
+        <select id="history-sort" onchange="renderHistory()">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Type</label>
+        <select id="history-type" onchange="renderHistory()">
+          <option value="">all</option>
+          <option value="lifts">lifts</option>
+          <option value="run">run</option>
+          <option value="conditioning">conditioning</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="field">
+        <label>Phase</label>
+        <select id="history-filter" onchange="renderHistory()">
+          <option value="">all</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Date range</label>
+        <select id="history-range" onchange="renderHistory()">
+          <option value="">all time</option>
+          <option value="7">last 7 days</option>
+          <option value="30">last 30 days</option>
+          <option value="90">last 90 days</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" style="margin-top:8px; margin-bottom:0">
+      <label>Search name</label>
+      <input type="text" id="history-search" placeholder="e.g. CHEST" oninput="renderHistory()">
     </div>
   </div>
   <p class="muted" style="margin: 8px 4px 12px 4px">Tap a session to edit it.</p>
@@ -436,12 +505,24 @@
     <div class="setting-row">
       <div class="setting-label">
         <div class="title">Units</div>
-        <div class="desc">Label only. Doesn't convert existing data.</div>
+        <div class="desc">Bodyweight + lift weight label. Doesn't convert existing data.</div>
       </div>
       <div class="setting-control">
         <select id="set-units" onchange="updateSetting('units', this.value)">
           <option value="lb">lb</option>
           <option value="kg">kg</option>
+        </select>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
+        <div class="title">Distance unit</div>
+        <div class="desc">For runs. Pace pairs automatically (min/mi or min/km).</div>
+      </div>
+      <div class="setting-control">
+        <select id="set-distanceunit" onchange="updateSetting('distanceUnit', this.value); renderLog();">
+          <option value="mi">mi</option>
+          <option value="km">km</option>
         </select>
       </div>
     </div>
@@ -485,7 +566,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.5 · single-file web app · data lives in this browser's localStorage</small>
+    <small>v0.7 · single-file web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -512,7 +593,7 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 7;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -523,21 +604,21 @@ const RUN_TYPES = {
   easy: {
     name: 'Easy / Z2',
     fields: [
-      { key: 'distance', label: 'Distance', placeholder: '5.2k', type: 'text' },
-      { key: 'time', label: 'Time', placeholder: '32:00', type: 'text' },
-      { key: 'pace', label: 'Avg pace', placeholder: '6:00/km', type: 'text' },
-      { key: 'hr', label: 'Avg HR', placeholder: '142', type: 'number' },
-      { key: 'rpe', label: 'RPE', placeholder: '3', type: 'number', min: 1, max: 10 },
+      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Time', placeholder: '32:00', type: 'text', validate: 'duration' },
+      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
+      { key: 'hr', label: 'Avg HR', placeholder: '142', type: 'number', validate: 'hr' },
+      { key: 'rpe', label: 'RPE', placeholder: '3', type: 'number', min: 1, max: 10, validate: 'rpe' },
       { key: 'notes', label: 'Notes', placeholder: 'How it felt, terrain, etc', type: 'textarea' }
     ]
   },
   tempo: {
     name: 'Tempo / Threshold',
     fields: [
-      { key: 'distance', label: 'Distance', placeholder: '5k', type: 'text' },
-      { key: 'time', label: 'Time', placeholder: '21:30', type: 'text' },
-      { key: 'pace', label: 'Avg pace', placeholder: '4:18/km', type: 'text' },
-      { key: 'hr', label: 'Avg HR', placeholder: '168', type: 'number' },
+      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Time', placeholder: '21:30', type: 'text', validate: 'duration' },
+      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
+      { key: 'hr', label: 'Avg HR', placeholder: '168', type: 'number', validate: 'hr' },
       { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
     ]
   },
@@ -548,19 +629,19 @@ const RUN_TYPES = {
       { key: 'targetPace', label: 'Target pace', placeholder: '3:00/800', type: 'text' },
       { key: 'recovery', label: 'Recovery', placeholder: '2 min jog', type: 'text' },
       { key: 'splits', label: 'Splits', placeholder: '2:58, 3:00, 2:59...', type: 'textarea' },
-      { key: 'totalDistance', label: 'Total distance (incl. WU/CD)', placeholder: '8k', type: 'text' },
-      { key: 'totalTime', label: 'Total session time', placeholder: '45:00', type: 'text' },
+      { key: 'totalDistance', label: 'Total distance (incl. WU/CD)', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'totalTime', label: 'Total session time', placeholder: '45:00', type: 'text', validate: 'duration' },
       { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
     ]
   },
   long: {
     name: 'Long Run',
     fields: [
-      { key: 'distance', label: 'Distance', placeholder: '20k', type: 'text' },
-      { key: 'time', label: 'Time', placeholder: '1:45:00', type: 'text' },
-      { key: 'pace', label: 'Avg pace', placeholder: '5:15/km', type: 'text' },
-      { key: 'hr', label: 'Avg HR', placeholder: '148', type: 'number' },
-      { key: 'rpe', label: 'RPE', placeholder: '5', type: 'number', min: 1, max: 10 },
+      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Time', placeholder: '1:45:00', type: 'text', validate: 'duration' },
+      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
+      { key: 'hr', label: 'Avg HR', placeholder: '148', type: 'number', validate: 'hr' },
+      { key: 'rpe', label: 'RPE', placeholder: '5', type: 'number', min: 1, max: 10, validate: 'rpe' },
       { key: 'fueling', label: 'Fueling', placeholder: '2 gels at 45 and 90 min', type: 'textarea' },
       { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
     ]
@@ -568,14 +649,99 @@ const RUN_TYPES = {
   race: {
     name: 'Race',
     fields: [
-      { key: 'distance', label: 'Distance', placeholder: '10k', type: 'text' },
-      { key: 'time', label: 'Time', placeholder: '42:18', type: 'text' },
-      { key: 'pace', label: 'Avg pace', placeholder: '4:14/km', type: 'text' },
+      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Time', placeholder: '42:18', type: 'text', validate: 'duration' },
+      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
       { key: 'result', label: 'Result / Place', placeholder: '23rd OA, 3rd AG', type: 'text' },
       { key: 'notes', label: 'Notes', placeholder: 'Race conditions, splits, etc', type: 'textarea' }
     ]
   }
 };
+
+// Resolve field label and placeholder based on unit setting
+function resolveFieldLabel(field) {
+  if (field.unit === 'distance') return `${field.label} (${settings.distanceUnit})`;
+  if (field.unit === 'pace') return `${field.label} (min/${settings.distanceUnit})`;
+  return field.label;
+}
+function resolveFieldPlaceholder(field) {
+  if (field.placeholder !== undefined) return field.placeholder;
+  if (field.unit === 'distance') {
+    return settings.distanceUnit === 'mi' ? '3.1' : '5.0';
+  }
+  if (field.unit === 'pace') {
+    return settings.distanceUnit === 'mi' ? '8:30' : '5:15';
+  }
+  return '';
+}
+
+// =====================================================================
+// VALIDATION
+// validateField returns true if the value passes the rule for that type.
+// Empty values are always considered valid (don't flag blank fields).
+// =====================================================================
+const VALIDATORS = {
+  // 12:34 or 1:23:45 — also checks minutes/seconds are < 60
+  duration: v => {
+    if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(v)) return false;
+    const parts = v.split(':').map(Number);
+    if (parts.length === 2) return parts[1] < 60;
+    if (parts.length === 3) return parts[1] < 60 && parts[2] < 60;
+    return false;
+  },
+  // 5:02 or 5:02/km or 5:02/mi — seconds part < 60
+  pace: v => {
+    if (!/^\d{1,2}:\d{2}(\/\w+)?$/.test(v)) return false;
+    const secPart = Number(v.split('/')[0].split(':')[1]);
+    return secPart < 60;
+  },
+  // numeric distance like 3.1 or 5
+  distance: v => /^\d+(\.\d+)?$/.test(v),
+  // heart rate 30-220
+  hr: v => { const n = Number(v); return Number.isFinite(n) && n >= 30 && n <= 220; },
+  // RPE 1-10
+  rpe: v => { const n = Number(v); return Number.isFinite(n) && n >= 1 && n <= 10; }
+};
+function validateField(rule, value) {
+  if (!value || !VALIDATORS[rule]) return true;
+  return VALIDATORS[rule](value);
+}
+
+// Parse a duration like "12:34" or "1:23:45" to total seconds. Returns null if invalid.
+function parseDurationToSeconds(s) {
+  if (!s || !VALIDATORS.duration(s)) return null;
+  const parts = s.split(':').map(Number);
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return null;
+}
+
+// Parse splits like "1:29.8, 1:30, 1:29" returning array of seconds, or null
+function parseSplitsToSeconds(s) {
+  if (!s) return null;
+  const tokens = s.split(/[,\n]/).map(t => t.trim()).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const seconds = [];
+  for (const t of tokens) {
+    // Accept "1:29.8" or "1:29" or "89.5" (just seconds with decimal)
+    const m1 = t.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+    const m2 = t.match(/^(\d+(?:\.\d+)?)$/);
+    // Allow trailing "(...)" annotation like "59.6(250m)" - strip parens
+    const cleaned = t.replace(/\([^)]*\)/, '').trim();
+    const m1c = cleaned.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+    const m2c = cleaned.match(/^(\d+(?:\.\d+)?)$/);
+    if (m1 || m1c) {
+      const m = m1 || m1c;
+      seconds.push(Number(m[1]) * 60 + Number(m[2]));
+    } else if (m2 || m2c) {
+      const m = m2 || m2c;
+      seconds.push(Number(m[1]));
+    } else {
+      return null; // unparseable token, give up
+    }
+  }
+  return seconds;
+}
 
 // =====================================================================
 // STATE
@@ -584,16 +750,17 @@ let state = {
   templates: [], history: [], currentSession: null, editingHistoryIndex: null
 };
 let settings = {
-  theme: 'auto', timeFormat: '24', units: 'lb', intensity: 'rpe', defaultPhase: ''
+  theme: 'auto', timeFormat: '24', units: 'lb', intensity: 'rpe',
+  defaultPhase: '', distanceUnit: 'mi'
 };
 
 function emptySession() {
   return {
     date: new Date().toISOString().slice(0, 10),
-    startTime: '', endTime: '', bodyweight: '',
+    startTime: '', endTime: '', endDate: '', bodyweight: '',
     name: '', phase: settings.defaultPhase || '',
     type: 'lifts', exercises: [],
-    runData: { runType: 'easy' }, // default run type
+    runData: {}, // populated only when type becomes 'run'
     condData: {}, notes: ''
   };
 }
@@ -650,6 +817,7 @@ function renderLog() {
   document.getElementById('session-bw').value = s.bodyweight || '';
   document.getElementById('session-start').value = s.startTime || '';
   document.getElementById('session-end').value = s.endTime || '';
+  document.getElementById('session-enddate').value = s.endDate || '';
   document.getElementById('session-type').value = s.type;
   document.getElementById('session-phase').value = s.phase || '';
   document.getElementById('session-name').value = s.name || '';
@@ -669,7 +837,7 @@ function renderLog() {
   updateFabVisibility();
 
   if (!renderLog._wired) {
-    ['session-date','session-bw','session-start','session-end','session-phase','session-name','session-notes']
+    ['session-date','session-bw','session-start','session-end','session-enddate','session-phase','session-name','session-notes']
       .forEach(id => document.getElementById(id).addEventListener('input', syncSessionFromForm));
     ['session-start','session-end'].forEach(id => {
       document.getElementById(id).addEventListener('focus', e => {
@@ -699,14 +867,68 @@ function syncSessionFromForm() {
   s.bodyweight = document.getElementById('session-bw').value;
   s.startTime = document.getElementById('session-start').value;
   s.endTime = document.getElementById('session-end').value;
+  s.endDate = document.getElementById('session-enddate').value;
   s.phase = document.getElementById('session-phase').value;
   s.name = document.getElementById('session-name').value;
   s.notes = document.getElementById('session-notes').value;
   saveState();
+  updateEndDateVisibility();
 }
+// Show End date field only when there's an end time (and the session type uses end time)
+function updateEndDateVisibility() {
+  const type = state.currentSession.type;
+  const endTime = document.getElementById('session-end').value;
+  const endDateField = document.getElementById('session-enddate-field');
+  const show = (type !== 'run') && !!endTime;
+  endDateField.style.display = show ? 'block' : 'none';
+}
+// Guard function: warns before switching session type if there is data
+// that would be hidden by the switch. Called by the type dropdown.
+function onSessionTypeChangeRequest(selectEl) {
+  const newType = selectEl.value;
+  const oldType = state.currentSession.type;
+  if (newType === oldType) return;
+
+  // Check whether the current session has data that belongs to the old type
+  const s = state.currentSession;
+  let hasOldData = false;
+  let oldDataDesc = '';
+  if (oldType === 'lifts' && s.exercises && s.exercises.length > 0) {
+    hasOldData = true;
+    oldDataDesc = `${s.exercises.length} exercise${s.exercises.length === 1 ? '' : 's'}`;
+  } else if (oldType === 'run' && s.runData && Object.keys(s.runData).some(k => k !== 'runType' && s.runData[k])) {
+    hasOldData = true;
+    oldDataDesc = 'run data';
+  } else if (oldType === 'conditioning' && s.condData && Object.keys(s.condData).some(k => s.condData[k])) {
+    hasOldData = true;
+    oldDataDesc = 'conditioning data';
+  }
+
+  if (hasOldData) {
+    const proceed = confirm(
+      `Switching to ${newType.toUpperCase()} will hide your ${oldDataDesc} (it stays in the data but won't display).\n\nClear it now instead?\n\n` +
+      `OK = clear the old data\n` +
+      `Cancel = keep the old data hidden`
+    );
+    if (proceed) {
+      // user chose to clear
+      if (oldType === 'lifts') s.exercises = [];
+      else if (oldType === 'run') s.runData = {};
+      else if (oldType === 'conditioning') s.condData = {};
+    }
+    // either way, proceed with the type change
+  }
+  // proceed with the actual type change
+  onSessionTypeChange();
+}
+
 function onSessionTypeChange() {
   const type = document.getElementById('session-type').value;
   state.currentSession.type = type;
+  // Keep start time on all session types. Hide end time only on runs.
+  document.getElementById('session-time-row').style.display = 'flex';
+  document.getElementById('session-end-field').style.display = (type === 'run') ? 'none' : 'block';
+  updateEndDateVisibility();
   const area = document.getElementById('exercises-area');
   if (type === 'lifts') { renderExercises(); }
   else if (type === 'run') { renderRunForm(); }
@@ -766,15 +988,18 @@ function renderRunForm() {
 }
 
 function renderRunField(field, rd) {
-  const value = escapeHtml(rd[field.key] || '');
-  const placeholder = escapeHtml(field.placeholder || '');
+  const rawValue = rd[field.key] || '';
+  const value = escapeHtml(rawValue);
+  const label = escapeHtml(resolveFieldLabel(field));
+  const placeholder = escapeHtml(resolveFieldPlaceholder(field));
   const id = 'run-' + field.key;
+  const invalidClass = (field.validate && !validateField(field.validate, rawValue)) ? ' invalid' : '';
 
   if (field.type === 'textarea') {
     return `
       <div class="field">
-        <label>${escapeHtml(field.label)}</label>
-        <textarea id="${id}" placeholder="${placeholder}">${value}</textarea>
+        <label>${label}</label>
+        <textarea id="${id}" class="${invalidClass.trim()}" placeholder="${placeholder}">${value}</textarea>
       </div>`;
   }
 
@@ -783,8 +1008,8 @@ function renderRunField(field, rd) {
                    (field.max !== undefined ? ` max="${field.max}"` : '');
     return `
       <div class="field">
-        <label>${escapeHtml(field.label)}</label>
-        <input type="number" inputmode="numeric" id="${id}" ${minMax}
+        <label>${label}</label>
+        <input type="number" inputmode="numeric" id="${id}" class="${invalidClass.trim()}" ${minMax}
           placeholder="${placeholder}" value="${value}">
       </div>`;
   }
@@ -792,8 +1017,8 @@ function renderRunField(field, rd) {
   // default: text
   return `
     <div class="field">
-      <label>${escapeHtml(field.label)}</label>
-      <input type="text" id="${id}" placeholder="${placeholder}" value="${value}">
+      <label>${label}</label>
+      <input type="text" id="${id}" class="${invalidClass.trim()}" placeholder="${placeholder}" value="${value}">
     </div>`;
 }
 
@@ -823,6 +1048,17 @@ function updateRunField(key, value) {
   if (!state.currentSession.runData) state.currentSession.runData = { runType: 'easy' };
   state.currentSession.runData[key] = value;
   saveState();
+  // Live validation: re-check this field and toggle .invalid class
+  const rd = state.currentSession.runData;
+  const typeDef = RUN_TYPES[rd.runType] || RUN_TYPES.easy;
+  const field = typeDef.fields.find(f => f.key === key);
+  if (field && field.validate) {
+    const el = document.getElementById('run-' + key);
+    if (el) {
+      if (validateField(field.validate, value)) el.classList.remove('invalid');
+      else el.classList.add('invalid');
+    }
+  }
 }
 
 function syncCondData() {
@@ -1136,9 +1372,76 @@ function deleteTemplate(i) {
 
 function saveSessionToHistory() {
   const s = state.currentSession;
+
+  // ---- BLOCKERS: nothing actually blocks, but these are first-line confirms ----
   if (s.type === 'lifts' && s.exercises.length === 0) {
     if (!confirm('No exercises logged. Save anyway?')) return;
   }
+
+  // ---- Build a list of warnings, show them all at once ----
+  const warnings = [];
+
+  // Missing common fields
+  if (s.type === 'lifts') {
+    if (!s.bodyweight) warnings.push('No bodyweight logged');
+    if (!s.endTime) warnings.push('No end time logged');
+  }
+  if (s.type === 'run') {
+    const rd = s.runData || {};
+    // Both distance and time empty is suspicious for any non-intervals run
+    if (rd.runType !== 'intervals' && !rd.distance && !rd.time) {
+      warnings.push('No distance or time logged');
+    }
+  }
+
+  // Time sanity: end before start (now considering endDate)
+  if (s.type !== 'run' && s.startTime && s.endTime) {
+    const startD = s.date;
+    const endD = s.endDate || s.date;
+    if (endD === startD && s.endTime < s.startTime) {
+      warnings.push(`End time (${s.endTime}) is before start time (${s.startTime}) on the same date. If this session crossed midnight, set "End date" to the next day.`);
+    } else if (endD < startD) {
+      warnings.push(`End date (${endD}) is before start date (${startD}).`);
+    }
+  }
+
+  // Cross-field sanity for runs
+  if (s.type === 'run') {
+    const rd = s.runData || {};
+    // Intervals: splits should sum near total time
+    if (rd.runType === 'intervals' && rd.splits && rd.totalTime) {
+      const splitsSec = parseSplitsToSeconds(rd.splits);
+      const totalSec = parseDurationToSeconds(rd.totalTime);
+      if (splitsSec && totalSec) {
+        const splitSum = splitsSec.reduce((a, b) => a + b, 0);
+        const diffPct = Math.abs(splitSum - totalSec) / totalSec;
+        if (diffPct > 0.10) {
+          warnings.push(`Splits sum to ${Math.round(splitSum)}s but total time is ${totalSec}s (off by ${Math.round(diffPct*100)}%). Could be intentional if total includes WU/CD.`);
+        }
+      }
+    }
+    // Pace vs distance/time consistency (only for runs with all three filled)
+    if (['easy','tempo','long','race'].includes(rd.runType) && rd.distance && rd.time && rd.pace) {
+      const distNum = Number(rd.distance);
+      const timeSec = parseDurationToSeconds(rd.time);
+      const paceSec = parseDurationToSeconds(rd.pace.replace(/\/.+$/, '')); // strip /km or /mi
+      if (Number.isFinite(distNum) && distNum > 0 && timeSec && paceSec) {
+        const impliedPaceSec = timeSec / distNum;
+        const diffPct = Math.abs(impliedPaceSec - paceSec) / paceSec;
+        if (diffPct > 0.10) {
+          const mm = Math.floor(impliedPaceSec / 60);
+          const ss = Math.round(impliedPaceSec % 60);
+          warnings.push(`Pace (${rd.pace}) doesn't match distance ÷ time (≈${mm}:${String(ss).padStart(2,'0')}/${settings.distanceUnit}). Off by ${Math.round(diffPct*100)}%.`);
+        }
+      }
+    }
+  }
+
+  if (warnings.length > 0) {
+    const message = "Heads up before saving:\n\n• " + warnings.join('\n• ') + "\n\nSave anyway?";
+    if (!confirm(message)) return;
+  }
+
   if (state.editingHistoryIndex !== null) {
     state.history[state.editingHistoryIndex] = JSON.parse(JSON.stringify(s));
     state.editingHistoryIndex = null;
@@ -1180,16 +1483,42 @@ function editHistorySession(idx) {
 }
 
 function renderHistory() {
+  // populate phase dropdown
   const filterEl = document.getElementById('history-filter');
   const phases = Array.from(new Set(state.history.map(s => s.phase).filter(Boolean))).sort();
-  const currentFilter = filterEl.value;
+  const currentPhase = filterEl.value;
   filterEl.innerHTML = '<option value="">all</option>' +
-    phases.map(p => `<option value="${escapeHtml(p)}" ${p===currentFilter?'selected':''}>${escapeHtml(p)}</option>`).join('');
+    phases.map(p => `<option value="${escapeHtml(p)}" ${p===currentPhase?'selected':''}>${escapeHtml(p)}</option>`).join('');
+
+  // read all filter controls
+  const sortOrder = document.getElementById('history-sort').value;
+  const typeFilter = document.getElementById('history-type').value;
+  const rangeFilter = document.getElementById('history-range').value;
+  const searchText = document.getElementById('history-search').value.trim().toLowerCase();
+
+  // start from full list, apply filters (AND logic)
+  let filtered = state.history.slice();
+
+  if (currentPhase) filtered = filtered.filter(s => s.phase === currentPhase);
+  if (typeFilter) filtered = filtered.filter(s => s.type === typeFilter);
+  if (searchText) filtered = filtered.filter(s => (s.name || '').toLowerCase().includes(searchText));
+  if (rangeFilter) {
+    const days = parseInt(rangeFilter);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    filtered = filtered.filter(s => s.date >= cutoffStr);
+  }
+
+  // sort by date (string compare works for YYYY-MM-DD)
+  filtered.sort((a, b) => {
+    if (sortOrder === 'oldest') return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
+    return a.date > b.date ? -1 : (a.date < b.date ? 1 : 0);
+  });
 
   const c = document.getElementById('history-list');
-  const filtered = currentFilter ? state.history.filter(s => s.phase === currentFilter) : state.history;
   if (filtered.length === 0) {
-    c.innerHTML = '<div class="card"><p class="muted">No sessions yet.</p></div>';
+    c.innerHTML = '<div class="card"><p class="muted">No sessions match these filters.</p></div>';
     return;
   }
   c.innerHTML = filtered.map(s => {
@@ -1200,7 +1529,7 @@ function renderHistory() {
     return `
       <div class="session-card ${s.type}" onclick="editHistorySession(${realIdx})">
         <div class="header-row" style="margin-bottom:4px">
-          <h3>${escapeHtml(s.date)} ${escapeHtml(s.name || '(unnamed)')}
+          <h3>${escapeHtml(s.date)}${s.name ? ' ' + escapeHtml(s.name) : ''}
             <span class="tag">${s.type}</span>
             ${runTypeTag}
             ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
@@ -1221,7 +1550,13 @@ function formatTime(t) {
   return `${h12}:${String(m).padStart(2,'0')} ${period}`;
 }
 function formatSessionMeta(s) {
-  const duration = (s.startTime && s.endTime) ? `${formatTime(s.startTime)}–${formatTime(s.endTime)}` : '';
+  let duration = '';
+  if (s.startTime && s.endTime) {
+    const crossDay = (s.endDate && s.endDate !== s.date) ? ' (+1d)' : '';
+    duration = `${formatTime(s.startTime)}–${formatTime(s.endTime)}${crossDay}`;
+  } else if (s.startTime) {
+    duration = `${formatTime(s.startTime)}`;
+  }
   const bw = s.bodyweight ? `${s.bodyweight} ${settings.units}` : '';
   return [duration, bw].filter(Boolean).join(' · ');
 }
@@ -1239,7 +1574,7 @@ function summarizeSessionText(s) {
     const typeDef = RUN_TYPES[r.runType] || RUN_TYPES.easy;
     const lines = typeDef.fields
       .filter(f => f.key !== 'notes' && r[f.key])
-      .map(f => `${f.label}: ${r[f.key]}`);
+      .map(f => `${resolveFieldLabel(f)}: ${r[f.key]}`);
     out = lines.join(' · ');
     if (r.notes) out += `\nnotes: ${r.notes}`;
   } else if (s.type === 'conditioning') {
@@ -1265,6 +1600,7 @@ function renderSettings() {
   document.getElementById('set-theme').value = settings.theme;
   document.getElementById('set-timeformat').value = settings.timeFormat;
   document.getElementById('set-units').value = settings.units;
+  document.getElementById('set-distanceunit').value = settings.distanceUnit || 'mi';
   document.getElementById('set-intensity').value = settings.intensity;
   document.getElementById('set-defaultphase').value = settings.defaultPhase || '';
 }

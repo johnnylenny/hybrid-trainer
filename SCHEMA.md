@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 5
+## Current schema version: 7
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -10,7 +10,7 @@ Every exported JSON file includes a `schemaVersion` field so future versions of 
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "exportedAt": "2026-05-24T18:41:00.000Z",
   "settings": { ... },
   "templates": [ ... ],
@@ -53,6 +53,7 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 | `date` | string (YYYY-MM-DD) | Date of the session. |
 | `startTime` | string (HH:MM, 24h) | When the session started. Optional. |
 | `endTime` | string (HH:MM, 24h) | When the session ended. Optional. |
+| `endDate` | string (YYYY-MM-DD) | Only set if the session ended on a different day than it started (e.g. crossed midnight). Empty/absent means same day as `date`. Added in v7. |
 | `bodyweight` | string | Stored as a string, not number. Unit is whatever the user had selected at log time. |
 | `name` | string | Free-text name, e.g. "BACK", "LEGS", "Easy run". |
 | `phase` | string | Training phase tag, e.g. "Hypertrophy", "Strength", "Peak". |
@@ -201,6 +202,7 @@ Templates only store exercise names and set types. They never store weights or r
 | `timeFormat` | string | `24`, `12` |
 | `units` | string | `lb`, `kg` (label only, not converted) |
 | `intensity` | string | `off`, `rpe`, `rir` |
+| `distanceUnit` | string | `mi`, `km` (label only; pace pairs automatically) |
 | `defaultPhase` | string | Free text. |
 
 ## Conventions and gotchas
@@ -216,7 +218,9 @@ Templates only store exercise names and set types. They never store weights or r
 
 ## Schema version history
 
-- **v5** (current) — Added `runType` field to run sessions with five types (easy, tempo, intervals, long, race), each with their own field set. Backwards compatible with v4: old runs without `runType` are treated as easy.
+- **v7** (current) — Added optional `endDate` field for sessions crossing midnight. Added `distanceUnit` setting (mi/km) affecting run field labels and pace. Added inline format validation (visual red-border only, never blocks saving) and pre-save warnings for missing or inconsistent data. Backwards compatible: sessions without `endDate` are treated as same-day.
+- **v6** — Cleaned up phantom defaults: `runData` and `condData` are now only populated for sessions whose `type` matches. Added session-type-switch guard in the UI to warn before hiding data. Backwards compatible: old files with phantom defaults still import fine.
+- **v5** — Added `runType` field to run sessions with five types (easy, tempo, intervals, long, race), each with their own field set. Backwards compatible with v4: old runs without `runType` are treated as easy.
 - **v4** — Added `schemaVersion`, `exportedAt`, optional `rir` field on working sets, and `settings` to exports.
 - **v3** (implicit, no version field) — Same as v2 visually but with the polished UI redesign.
 - **v2** (implicit, no version field) — Introduced four set types (warmup, working, myorep, drop), session metadata (date, start/end time, bodyweight, name, phase), templates, history, run and conditioning session types.
