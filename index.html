@@ -1,8 +1,14 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.8
+  HYBRID TRAINER v0.8.1
   Single-file web app (+ Chart.js from CDN for the Stats tab).
   Read SCHEMA.md in the repo for data structure.
+
+  What's new vs v0.8:
+    - Bugfix: chart dropdowns now actually update the chart
+    - Bugfix: picking an exercise with no working sets (e.g. myo-rep only)
+      no longer breaks the chart; switching back to a normal exercise
+      restores it properly
 
   What's new vs v0.7:
     - New "Stats" tab with 5 charts: bodyweight, exercise progression,
@@ -347,7 +353,7 @@
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.8</small>
+    <small>v0.8.1</small>
   </div>
   <div class="header-actions">
     <button class="btn-small" onclick="exportData()">Export</button>
@@ -588,7 +594,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.8 · single-file web app · data lives in this browser's localStorage</small>
+    <small>v0.8.1 · single-file web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1655,11 +1661,27 @@ function deleteHistory(i) {
 // STATS / CHARTS
 // Uses Chart.js (loaded from CDN). All charts read from state.history.
 // =====================================================================
-let _chartInstances = [];
+let _chartInstances = {}; // canvasId -> Chart instance
 
 function destroyCharts() {
-  _chartInstances.forEach(c => { try { c.destroy(); } catch(e){} });
-  _chartInstances = [];
+  Object.values(_chartInstances).forEach(c => { try { c.destroy(); } catch(e){} });
+  _chartInstances = {};
+}
+// Destroy a single chart and clear any "no data" overlay for its canvas,
+// so the canvas is in a clean state before drawing again.
+function prepareCanvas(canvasId) {
+  if (_chartInstances[canvasId]) {
+    try { _chartInstances[canvasId].destroy(); } catch(e){}
+    delete _chartInstances[canvasId];
+  }
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return null;
+  // remove any previous "no data" overlay sitting next to the canvas
+  const wrap = canvas.parentElement;
+  const oldMsg = wrap.querySelector('.chart-nodata');
+  if (oldMsg) oldMsg.remove();
+  canvas.style.display = 'block';
+  return canvas;
 }
 
 function chartColors() {
@@ -1811,23 +1833,25 @@ function onStatsRunTypeChange(rt) {
 
 function drawBodyweightChart() {
   const colors = chartColors();
+  const ctx = prepareCanvas('chart-bw');
+  if (!ctx) return;
   const rows = state.history
     .filter(s => s.bodyweight && Number(s.bodyweight) > 0)
     .map(s => ({ date: s.date, bw: Number(s.bodyweight) }))
     .sort((a, b) => a.date < b.date ? -1 : 1);
-  const ctx = document.getElementById('chart-bw');
   if (rows.length === 0) { noData(ctx); return; }
-  _chartInstances.push(new Chart(ctx, {
+  _chartInstances['chart-bw'] = new Chart(ctx, {
     type: 'line',
     data: { labels: rows.map(r => r.date.slice(5)),
       datasets: [{ data: rows.map(r => r.bw), borderColor: colors.accent, backgroundColor: colors.accent, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
     options: baseLineOptions(colors, settings.units)
-  }));
+  });
 }
 
 function drawExerciseChart(exName) {
   const colors = chartColors();
-  const ctx = document.getElementById('chart-exercise');
+  const ctx = prepareCanvas('chart-exercise');
+  if (!ctx) return;
   if (!exName) { noData(ctx); return; }
   const rows = state.history
     .filter(s => s.type === 'lifts')
@@ -1835,7 +1859,7 @@ function drawExerciseChart(exName) {
     .filter(r => r.best && r.best.topWeight > 0)
     .sort((a, b) => a.date < b.date ? -1 : 1);
   if (rows.length === 0) { noData(ctx); return; }
-  _chartInstances.push(new Chart(ctx, {
+  _chartInstances['chart-exercise'] = new Chart(ctx, {
     type: 'line',
     data: { labels: rows.map(r => r.date.slice(5)),
       datasets: [{ label: exName + ' top set', data: rows.map(r => r.best.topWeight),
@@ -1844,12 +1868,13 @@ function drawExerciseChart(exName) {
       plugins: { legend: { display: false },
         tooltip: { callbacks: { afterLabel: (item) => rows[item.dataIndex].best.topWeight + ' x ' + rows[item.dataIndex].best.topReps } } }
     })
-  }));
+  });
 }
 
 function draw1RMChart(exName) {
   const colors = chartColors();
-  const ctx = document.getElementById('chart-1rm');
+  const ctx = prepareCanvas('chart-1rm');
+  if (!ctx) return;
   if (!exName) { noData(ctx); return; }
   const rows = state.history
     .filter(s => s.type === 'lifts')
@@ -1857,18 +1882,19 @@ function draw1RMChart(exName) {
     .filter(r => r.best && r.best.best1RM > 0)
     .sort((a, b) => a.date < b.date ? -1 : 1);
   if (rows.length === 0) { noData(ctx); return; }
-  _chartInstances.push(new Chart(ctx, {
+  _chartInstances['chart-1rm'] = new Chart(ctx, {
     type: 'line',
     data: { labels: rows.map(r => r.date.slice(5)),
       datasets: [{ data: rows.map(r => Math.round(r.best.best1RM)),
         borderColor: colors.info, backgroundColor: colors.info, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
     options: baseLineOptions(colors, 'est 1RM (' + settings.units + ')')
-  }));
+  });
 }
 
 function drawPaceChart(runType) {
   const colors = chartColors();
-  const ctx = document.getElementById('chart-pace');
+  const ctx = prepareCanvas('chart-pace');
+  if (!ctx) return;
   const rows = state.history
     .filter(s => s.type === 'run' && s.runData && s.runData.runType === runType)
     .map(s => ({ date: s.date, pace: paceToSeconds(s.runData.pace) }))
@@ -1879,17 +1905,18 @@ function drawPaceChart(runType) {
   opts.scales.y.ticks.callback = (v) => secondsToPace(v);
   opts.plugins = { legend: { display: false },
     tooltip: { callbacks: { label: (item) => secondsToPace(item.parsed.y) + '/' + settings.distanceUnit } } };
-  _chartInstances.push(new Chart(ctx, {
+  _chartInstances['chart-pace'] = new Chart(ctx, {
     type: 'line',
     data: { labels: rows.map(r => r.date.slice(5)),
       datasets: [{ data: rows.map(r => r.pace), borderColor: colors.success, backgroundColor: colors.success, tension: 0.2, pointRadius: 3, borderWidth: 2 }] },
     options: opts
-  }));
+  });
 }
 
 function drawVolumeChart() {
   const colors = chartColors();
-  const ctx = document.getElementById('chart-volume');
+  const ctx = prepareCanvas('chart-volume');
+  if (!ctx) return;
   function weekStart(dateStr) {
     const d = new Date(dateStr + 'T00:00:00');
     const day = (d.getDay() + 6) % 7;
@@ -1904,7 +1931,7 @@ function drawVolumeChart() {
   });
   const weekKeys = Object.keys(weeks).sort();
   if (weekKeys.length === 0) { noData(ctx); return; }
-  _chartInstances.push(new Chart(ctx, {
+  _chartInstances['chart-volume'] = new Chart(ctx, {
     type: 'bar',
     data: { labels: weekKeys.map(w => w.slice(5)),
       datasets: [
@@ -1921,13 +1948,20 @@ function drawVolumeChart() {
              title: { display: true, text: 'sessions', color: colors.text } }
       }
     }
-  }));
+  });
 }
 
 function noData(canvas) {
   if (!canvas) return;
-  const wrap = canvas.parentElement;
-  wrap.innerHTML = '<p class="muted" style="text-align:center; padding-top:90px;">Not enough data yet for this chart.</p>';
+  // Keep the canvas in the DOM so it can be redrawn later. Hide it and
+  // add a sibling message that prepareCanvas() will remove on the next draw.
+  canvas.style.display = 'none';
+  const msg = document.createElement('p');
+  msg.className = 'muted chart-nodata';
+  msg.style.textAlign = 'center';
+  msg.style.paddingTop = '90px';
+  msg.textContent = 'Not enough data yet for this chart.';
+  canvas.parentElement.appendChild(msg);
 }
 
 
