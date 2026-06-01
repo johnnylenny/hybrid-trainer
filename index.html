@@ -1,24 +1,17 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.8.1
-  Single-file web app (+ Chart.js from CDN for the Stats tab).
-  Read SCHEMA.md in the repo for data structure.
+  HYBRID TRAINER v0.9 — backend sync setup (Session 1: auth only)
+  Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.8:
-    - Bugfix: chart dropdowns now actually update the chart
-    - Bugfix: picking an exercise with no working sets (e.g. myo-rep only)
-      no longer breaks the chart; switching back to a normal exercise
-      restores it properly
+  What's new vs v0.8.1:
+    - Supabase client connected
+    - Sign-in screen (email+password OR magic link)
+    - Sign-out button
+    - Auth status badge in header
+    - Data still lives in localStorage. Sync logic comes in v0.10.
 
-  What's new vs v0.7:
-    - New "Stats" tab with 5 charts: bodyweight, exercise progression,
-      estimated 1RM, run pace trend, weekly volume (uses Chart.js)
-    - End date is now behind an "Ended on a different day" checkbox
-      instead of auto-appearing when an end time is entered
-    - Fixed mobile input overflow (boxes spilling past card edge)
-
-  Schema unchanged from v7 (still 7). Charts read existing data, no new fields.
-  Data: localStorage key 'hybridTrainerV2'. Settings: 'hybridTrainerSettings'.
+  Schema: same as v7. Data layer migration to come.
+  Auth: Supabase Email provider with magic link fallback.
 -->
 <html lang="en">
 <head>
@@ -28,6 +21,7 @@
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Hybrid Trainer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root {
     --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --surface-3: #e8e8eb;
@@ -328,6 +322,45 @@
   }
 
   /* Narrow screens (iPhone Mini = 375pt, and smaller) */
+  /* Sign-in screen */
+  .signin-overlay {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .signin-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 380px;
+    width: 100%;
+    box-shadow: var(--shadow-lg);
+  }
+  .signin-card h2 { color: var(--text); margin-bottom: 4px; text-transform: none; letter-spacing: 0; font-size: 1.25rem; font-weight: 700; }
+  .signin-card .sub { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 18px; }
+  .signin-divider { text-align: center; color: var(--text-dim); font-size: 0.75rem; margin: 14px 0; text-transform: uppercase; letter-spacing: 0.1em; }
+  .signin-msg { padding: 10px; border-radius: var(--radius-sm); font-size: 0.85rem; margin-top: 12px; }
+  .signin-msg.success { background: rgba(22, 163, 74, 0.1); color: var(--success); border: 1px solid var(--success); }
+  .signin-msg.error { background: rgba(220, 38, 38, 0.1); color: var(--danger); border: 1px solid var(--danger); }
+  .signin-toggle { text-align: center; margin-top: 14px; font-size: 0.85rem; }
+  .signin-toggle a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .signed-in-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface-2);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .signed-in-badge button {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 0.72rem; cursor: pointer; text-decoration: underline;
+  }
   @media (max-width: 400px) {
     body { padding-left: 12px; padding-right: 12px; }
     /* Stack form rows vertically so fields never overlap or clip buttons */
@@ -350,10 +383,45 @@
 </head>
 <body>
 
+<!-- ========== SIGN-IN OVERLAY ========== -->
+<div id="signin-overlay" class="signin-overlay" style="display:none">
+  <div class="signin-card">
+    <h2 id="signin-title">Sign in</h2>
+    <p class="sub" id="signin-sub">Welcome back. Sign in to sync your workouts across devices.</p>
+
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="signin-email" placeholder="you@example.com" autocomplete="email">
+    </div>
+
+    <div class="field" id="signin-password-field">
+      <label>Password</label>
+      <input type="password" id="signin-password" placeholder="At least 6 characters" autocomplete="current-password">
+    </div>
+
+    <button class="btn" id="signin-submit" style="width:100%" onclick="handleSignInSubmit()">Sign in</button>
+
+    <div class="signin-divider">or</div>
+
+    <button class="btn-secondary" style="width:100%" onclick="handleMagicLink()">Email me a sign-in link</button>
+
+    <div id="signin-msg" class="signin-msg" style="display:none"></div>
+
+    <div class="signin-toggle">
+      <span id="signin-toggle-text">Don't have an account? </span>
+      <a id="signin-toggle-link" onclick="toggleSignInMode()">Create one</a>
+    </div>
+  </div>
+</div>
+
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.8.1</small>
+    <small>v0.9</small>
+    <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
+      <span id="auth-email"></span>
+      <button onclick="handleSignOut()">Sign out</button>
+    </div>
   </div>
   <div class="header-actions">
     <button class="btn-small" onclick="exportData()">Export</button>
@@ -594,7 +662,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.8.1 · single-file web app · data lives in this browser's localStorage</small>
+    <small>v0.9 · cloud-sync-enabled web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -628,6 +696,136 @@
 const SCHEMA_VERSION = 7;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
+
+// =====================================================================
+// SUPABASE CONFIG
+// The anon/publishable key is safe to embed in client code.
+// Real security comes from Row Level Security policies on the database.
+// =====================================================================
+const SUPABASE_URL = 'https://rrrfmudypfhywiremudw.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_QHSZn7O0nzFYayLgRI9nKA_b-hASuQW';
+
+let supabase = null;
+let currentUser = null;
+let signInMode = 'signin'; // 'signin' or 'signup'
+
+function initSupabase() {
+  if (typeof window.supabase === 'undefined') {
+    console.error('Supabase client failed to load from CDN');
+    return false;
+  }
+  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return true;
+}
+
+// =====================================================================
+// AUTH FLOW
+// On boot we check for an existing session. If none, show sign-in overlay.
+// =====================================================================
+async function checkAuth() {
+  if (!supabase) return;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session && session.user) {
+    currentUser = session.user;
+    onSignedIn();
+  } else {
+    showSignInOverlay();
+  }
+  // Listen for auth changes (sign in via magic link, sign out, etc.)
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_IN' && session) {
+      currentUser = session.user;
+      onSignedIn();
+    } else if (event === 'SIGNED_OUT') {
+      currentUser = null;
+      showSignInOverlay();
+    }
+  });
+}
+
+function showSignInOverlay() {
+  document.getElementById('signin-overlay').style.display = 'flex';
+  document.getElementById('auth-badge').style.display = 'none';
+}
+
+function onSignedIn() {
+  document.getElementById('signin-overlay').style.display = 'none';
+  document.getElementById('auth-badge').style.display = 'inline-flex';
+  document.getElementById('auth-email').textContent = currentUser.email || 'signed in';
+  // (Data sync will hook in here in v0.10. For now we just render the app
+  //  using localStorage as before.)
+  renderLog();
+}
+
+function toggleSignInMode() {
+  signInMode = (signInMode === 'signin') ? 'signup' : 'signin';
+  const isSignUp = signInMode === 'signup';
+  document.getElementById('signin-title').textContent = isSignUp ? 'Create account' : 'Sign in';
+  document.getElementById('signin-sub').textContent = isSignUp
+    ? 'Use your email and a password. Both will work to sign in later.'
+    : 'Welcome back. Sign in to sync your workouts across devices.';
+  document.getElementById('signin-submit').textContent = isSignUp ? 'Create account' : 'Sign in';
+  document.getElementById('signin-toggle-text').textContent = isSignUp ? 'Have an account? ' : "Don't have an account? ";
+  document.getElementById('signin-toggle-link').textContent = isSignUp ? 'Sign in' : 'Create one';
+  setSignInMsg('', null);
+}
+
+function setSignInMsg(text, kind) {
+  const el = document.getElementById('signin-msg');
+  if (!text) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.className = 'signin-msg ' + (kind || '');
+  el.textContent = text;
+}
+
+async function handleSignInSubmit() {
+  const email = document.getElementById('signin-email').value.trim();
+  const password = document.getElementById('signin-password').value;
+  if (!email || !password) { setSignInMsg('Email and password required.', 'error'); return; }
+  if (signInMode === 'signup' && password.length < 6) {
+    setSignInMsg('Password must be at least 6 characters.', 'error');
+    return;
+  }
+  setSignInMsg('Working...', null);
+  try {
+    const { data, error } = (signInMode === 'signup')
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password });
+    if (error) { setSignInMsg(error.message, 'error'); return; }
+    // signUp may require email confirmation depending on Supabase project settings;
+    // signIn returns a session immediately.
+    if (signInMode === 'signup' && !data.session) {
+      setSignInMsg('Account created. Check your email if confirmation is required, otherwise sign in now.', 'success');
+      signInMode = 'signin';
+      toggleSignInMode(); // resets back to signin text
+    }
+    // SIGNED_IN event will fire via onAuthStateChange and call onSignedIn()
+  } catch (e) {
+    setSignInMsg('Unexpected error: ' + e.message, 'error');
+  }
+}
+
+async function handleMagicLink() {
+  const email = document.getElementById('signin-email').value.trim();
+  if (!email) { setSignInMsg('Enter your email first, then click the magic link button.', 'error'); return; }
+  setSignInMsg('Sending magic link...', null);
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.href.split('#')[0] }
+    });
+    if (error) { setSignInMsg(error.message, 'error'); return; }
+    setSignInMsg('Check your email for the sign-in link. Open it on this same device.', 'success');
+  } catch (e) {
+    setSignInMsg('Unexpected error: ' + e.message, 'error');
+  }
+}
+
+async function handleSignOut() {
+  if (!confirm('Sign out? Your local data stays on this device.')) return;
+  await supabase.auth.signOut();
+  // onAuthStateChange will show the sign-in overlay
+}
 
 // Run types and the fields each one shows.
 // Adding a new type? Add it here. The renderRunForm function reads this.
@@ -2060,6 +2258,14 @@ function escapeJs(str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"
 loadState();
 applyTheme();
 renderLog();
+
+// Boot Supabase auth last so the app is rendered behind the sign-in overlay
+if (initSupabase()) {
+  checkAuth();
+} else {
+  // No Supabase available (offline, CDN blocked, etc.) — fall back to localStorage-only mode
+  console.warn('Supabase unavailable. Running in local-only mode.');
+}
 </script>
 </body>
 </html>
