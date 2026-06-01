@@ -705,7 +705,7 @@ const SETTINGS_KEY = 'hybridTrainerSettings';
 const SUPABASE_URL = 'https://rrrfmudypfhywiremudw.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_QHSZn7O0nzFYayLgRI9nKA_b-hASuQW';
 
-let supabase = null;
+let sb = null;
 let currentUser = null;
 let signInMode = 'signin'; // 'signin' or 'signup'
 
@@ -714,7 +714,7 @@ function initSupabase() {
     console.error('Supabase client failed to load from CDN');
     return false;
   }
-  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   return true;
 }
 
@@ -723,8 +723,8 @@ function initSupabase() {
 // On boot we check for an existing session. If none, show sign-in overlay.
 // =====================================================================
 async function checkAuth() {
-  if (!supabase) return;
-  const { data: { session } } = await supabase.auth.getSession();
+  if (!sb) return;
+  const { data: { session } } = await sb.auth.getSession();
   if (session && session.user) {
     currentUser = session.user;
     onSignedIn();
@@ -732,7 +732,7 @@ async function checkAuth() {
     showSignInOverlay();
   }
   // Listen for auth changes (sign in via magic link, sign out, etc.)
-  supabase.auth.onAuthStateChange((event, session) => {
+  sb.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_IN' && session) {
       currentUser = session.user;
       onSignedIn();
@@ -789,8 +789,8 @@ async function handleSignInSubmit() {
   setSignInMsg('Working...', null);
   try {
     const { data, error } = (signInMode === 'signup')
-      ? await supabase.auth.signUp({ email, password })
-      : await supabase.auth.signInWithPassword({ email, password });
+      ? await sb.auth.signUp({ email, password })
+      : await sb.auth.signInWithPassword({ email, password });
     if (error) { setSignInMsg(error.message, 'error'); return; }
     // signUp may require email confirmation depending on Supabase project settings;
     // signIn returns a session immediately.
@@ -810,7 +810,7 @@ async function handleMagicLink() {
   if (!email) { setSignInMsg('Enter your email first, then click the magic link button.', 'error'); return; }
   setSignInMsg('Sending magic link...', null);
   try {
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await sb.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: window.location.href.split('#')[0] }
     });
@@ -823,7 +823,7 @@ async function handleMagicLink() {
 
 async function handleSignOut() {
   if (!confirm('Sign out? Your local data stays on this device.')) return;
-  await supabase.auth.signOut();
+  await sb.auth.signOut();
   // onAuthStateChange will show the sign-in overlay
 }
 
