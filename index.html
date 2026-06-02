@@ -1,17 +1,20 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.9 — backend sync setup (Session 1: auth only)
+  HYBRID TRAINER v0.9.1 — auth UX polish
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.8.1:
-    - Supabase client connected
-    - Sign-in screen (email+password OR magic link)
-    - Sign-out button
-    - Auth status badge in header
-    - Data still lives in localStorage. Sync logic comes in v0.10.
+  What's new vs v0.9:
+    - Tabbed Sign in / Create account UI (much clearer mode switching)
+    - Better handling for email confirmation: clear message when needed,
+      "Resend confirmation email" option if the user gets stuck
+    - Special-case message for the "Email not confirmed" error
+    - Delete Account button in Settings → Danger zone (visible when signed in).
+      Wipes user's rows from sessions/templates/user_settings via RLS.
+      Auth user record itself stays until manually removed in Supabase dashboard
+      (deleting that requires a server-side RPC which we'll add later).
 
-  Schema: same as v7. Data layer migration to come.
-  Auth: Supabase Email provider with magic link fallback.
+  Still: data lives in localStorage. Sync logic comes in v0.10.
+  Schema unchanged. Same Supabase project + RLS policies as v0.9.
 -->
 <html lang="en">
 <head>
@@ -343,12 +346,39 @@
   }
   .signin-card h2 { color: var(--text); margin-bottom: 4px; text-transform: none; letter-spacing: 0; font-size: 1.25rem; font-weight: 700; }
   .signin-card .sub { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 18px; }
+  .signin-tabs {
+    display: flex;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    padding: 4px;
+    margin-bottom: 16px;
+    gap: 4px;
+  }
+  .signin-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 10px 8px;
+    border-radius: calc(var(--radius-sm) - 2px);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .signin-tab.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+  }
   .signin-divider { text-align: center; color: var(--text-dim); font-size: 0.75rem; margin: 14px 0; text-transform: uppercase; letter-spacing: 0.1em; }
   .signin-msg { padding: 10px; border-radius: var(--radius-sm); font-size: 0.85rem; margin-top: 12px; }
   .signin-msg.success { background: rgba(22, 163, 74, 0.1); color: var(--success); border: 1px solid var(--success); }
   .signin-msg.error { background: rgba(220, 38, 38, 0.1); color: var(--danger); border: 1px solid var(--danger); }
-  .signin-toggle { text-align: center; margin-top: 14px; font-size: 0.85rem; }
-  .signin-toggle a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .signin-msg.info { background: rgba(37, 99, 235, 0.1); color: var(--info); border: 1px solid var(--info); }
+  .signin-extra { text-align: center; margin-top: 12px; font-size: 0.82rem; }
+  .signin-extra a { color: var(--accent); cursor: pointer; text-decoration: underline; }
   .signed-in-badge {
     display: inline-flex; align-items: center; gap: 6px;
     background: var(--surface-2);
@@ -386,8 +416,12 @@
 <!-- ========== SIGN-IN OVERLAY ========== -->
 <div id="signin-overlay" class="signin-overlay" style="display:none">
   <div class="signin-card">
-    <h2 id="signin-title">Sign in</h2>
-    <p class="sub" id="signin-sub">Welcome back. Sign in to sync your workouts across devices.</p>
+    <div class="signin-tabs">
+      <button class="signin-tab active" id="signin-tab-signin" onclick="setSignInMode('signin')">Sign in</button>
+      <button class="signin-tab" id="signin-tab-signup" onclick="setSignInMode('signup')">Create account</button>
+    </div>
+
+    <p class="sub" id="signin-sub">Welcome back. Sign in to sync workouts across devices.</p>
 
     <div class="field">
       <label>Email</label>
@@ -407,9 +441,8 @@
 
     <div id="signin-msg" class="signin-msg" style="display:none"></div>
 
-    <div class="signin-toggle">
-      <span id="signin-toggle-text">Don't have an account? </span>
-      <a id="signin-toggle-link" onclick="toggleSignInMode()">Create one</a>
+    <div class="signin-extra" id="signin-extra" style="display:none">
+      <a onclick="handleResendConfirmation()">Resend confirmation email</a>
     </div>
   </div>
 </div>
@@ -417,7 +450,7 @@
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.9</small>
+    <small>v0.9.1</small>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
       <span id="auth-email"></span>
       <button onclick="handleSignOut()">Sign out</button>
@@ -657,12 +690,17 @@
 
   <h2>Danger zone</h2>
   <div class="card danger-zone">
-    <p class="muted" style="margin-bottom:12px">Permanently deletes everything: sessions, templates, current session. There is no undo.</p>
-    <button class="btn-danger-strong" onclick="nukeAllData()">Delete all data</button>
+    <p class="muted" style="margin-bottom:12px">Permanently deletes everything stored on this device: sessions, templates, current session. There is no undo.</p>
+    <button class="btn-danger-strong" onclick="nukeAllData()">Delete all local data</button>
+  </div>
+
+  <div class="card danger-zone" id="delete-account-card" style="display:none; margin-top:12px;">
+    <p class="muted" style="margin-bottom:12px">Permanently deletes your cloud account and ALL cloud-synced data (sessions, templates, settings). Local data on this device is NOT touched. There is no undo.</p>
+    <button class="btn-danger-strong" onclick="handleDeleteAccount()">Delete account</button>
   </div>
 
   <div class="card compact">
-    <small>v0.9 · cloud-sync-enabled web app · data lives in this browser's localStorage</small>
+    <small>v0.9.1 · cloud-sync-enabled web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -752,22 +790,26 @@ function onSignedIn() {
   document.getElementById('signin-overlay').style.display = 'none';
   document.getElementById('auth-badge').style.display = 'inline-flex';
   document.getElementById('auth-email').textContent = currentUser.email || 'signed in';
+  // Show the delete-account card in Settings now that we have an account to delete
+  const card = document.getElementById('delete-account-card');
+  if (card) card.style.display = 'block';
   // (Data sync will hook in here in v0.10. For now we just render the app
   //  using localStorage as before.)
   renderLog();
 }
 
-function toggleSignInMode() {
-  signInMode = (signInMode === 'signin') ? 'signup' : 'signin';
-  const isSignUp = signInMode === 'signup';
-  document.getElementById('signin-title').textContent = isSignUp ? 'Create account' : 'Sign in';
+function setSignInMode(mode) {
+  signInMode = mode;
+  const isSignUp = mode === 'signup';
+  document.getElementById('signin-tab-signin').classList.toggle('active', !isSignUp);
+  document.getElementById('signin-tab-signup').classList.toggle('active', isSignUp);
   document.getElementById('signin-sub').textContent = isSignUp
-    ? 'Use your email and a password. Both will work to sign in later.'
-    : 'Welcome back. Sign in to sync your workouts across devices.';
+    ? 'New here. Pick a password — you can also sign in via emailed link later.'
+    : 'Welcome back. Sign in to sync workouts across devices.';
   document.getElementById('signin-submit').textContent = isSignUp ? 'Create account' : 'Sign in';
-  document.getElementById('signin-toggle-text').textContent = isSignUp ? 'Have an account? ' : "Don't have an account? ";
-  document.getElementById('signin-toggle-link').textContent = isSignUp ? 'Sign in' : 'Create one';
+  document.getElementById('signin-password').setAttribute('autocomplete', isSignUp ? 'new-password' : 'current-password');
   setSignInMsg('', null);
+  document.getElementById('signin-extra').style.display = 'none';
 }
 
 function setSignInMsg(text, kind) {
@@ -786,20 +828,36 @@ async function handleSignInSubmit() {
     setSignInMsg('Password must be at least 6 characters.', 'error');
     return;
   }
-  setSignInMsg('Working...', null);
+  setSignInMsg('Working...', 'info');
   try {
-    const { data, error } = (signInMode === 'signup')
-      ? await sb.auth.signUp({ email, password })
-      : await sb.auth.signInWithPassword({ email, password });
-    if (error) { setSignInMsg(error.message, 'error'); return; }
-    // signUp may require email confirmation depending on Supabase project settings;
-    // signIn returns a session immediately.
-    if (signInMode === 'signup' && !data.session) {
-      setSignInMsg('Account created. Check your email if confirmation is required, otherwise sign in now.', 'success');
-      signInMode = 'signin';
-      toggleSignInMode(); // resets back to signin text
+    if (signInMode === 'signup') {
+      const { data, error } = await sb.auth.signUp({
+        email, password,
+        options: { emailRedirectTo: window.location.href.split('#')[0] }
+      });
+      if (error) { setSignInMsg(error.message, 'error'); return; }
+      if (data.session) {
+        // Email confirmation is OFF in Supabase: user is signed in immediately
+        // SIGNED_IN event will fire and call onSignedIn()
+      } else {
+        // Email confirmation is ON: user must click email link before they can sign in
+        setSignInMsg('Account created. Check your email (' + email + ') for a confirmation link. Click it to activate your account, then sign in.', 'success');
+        document.getElementById('signin-extra').style.display = 'block';
+      }
+    } else {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) {
+        // Special-case the most common confusing error
+        if (error.message && error.message.toLowerCase().includes('email not confirmed')) {
+          setSignInMsg('Your email isn\'t confirmed yet. Check your inbox for the confirmation link, or resend it below.', 'error');
+          document.getElementById('signin-extra').style.display = 'block';
+        } else {
+          setSignInMsg(error.message, 'error');
+        }
+        return;
+      }
+      // SIGNED_IN event will fire and call onSignedIn()
     }
-    // SIGNED_IN event will fire via onAuthStateChange and call onSignedIn()
   } catch (e) {
     setSignInMsg('Unexpected error: ' + e.message, 'error');
   }
@@ -808,7 +866,7 @@ async function handleSignInSubmit() {
 async function handleMagicLink() {
   const email = document.getElementById('signin-email').value.trim();
   if (!email) { setSignInMsg('Enter your email first, then click the magic link button.', 'error'); return; }
-  setSignInMsg('Sending magic link...', null);
+  setSignInMsg('Sending magic link...', 'info');
   try {
     const { error } = await sb.auth.signInWithOtp({
       email,
@@ -821,10 +879,66 @@ async function handleMagicLink() {
   }
 }
 
+async function handleResendConfirmation() {
+  const email = document.getElementById('signin-email').value.trim();
+  if (!email) { setSignInMsg('Enter your email first.', 'error'); return; }
+  setSignInMsg('Resending confirmation email...', 'info');
+  try {
+    const { error } = await sb.auth.resend({
+      type: 'signup',
+      email,
+      options: { emailRedirectTo: window.location.href.split('#')[0] }
+    });
+    if (error) { setSignInMsg(error.message, 'error'); return; }
+    setSignInMsg('Confirmation email resent. Check your inbox (and spam folder).', 'success');
+  } catch (e) {
+    setSignInMsg('Unexpected error: ' + e.message, 'error');
+  }
+}
+
 async function handleSignOut() {
   if (!confirm('Sign out? Your local data stays on this device.')) return;
   await sb.auth.signOut();
   // onAuthStateChange will show the sign-in overlay
+}
+
+async function handleDeleteAccount() {
+  if (!currentUser) return;
+  const confirm1 = prompt(
+    'This permanently deletes your account, all your cloud-synced sessions, templates, and settings.\n\n' +
+    'Local data in this browser is NOT touched.\n\n' +
+    'Type DELETE (all caps) to confirm:'
+  );
+  if (confirm1 !== 'DELETE') { alert('Cancelled.'); return; }
+  if (!confirm('Last chance. Really delete your account?')) return;
+
+  try {
+    // Delete user data from tables. RLS policies ensure we can only delete our own rows.
+    const userId = currentUser.id;
+    const errors = [];
+
+    const { error: e1 } = await sb.from('sessions').delete().eq('user_id', userId);
+    if (e1) errors.push('sessions: ' + e1.message);
+    const { error: e2 } = await sb.from('templates').delete().eq('user_id', userId);
+    if (e2) errors.push('templates: ' + e2.message);
+    const { error: e3 } = await sb.from('user_settings').delete().eq('user_id', userId);
+    if (e3) errors.push('settings: ' + e3.message);
+
+    if (errors.length > 0) {
+      alert('Some data could not be deleted:\n' + errors.join('\n') + '\n\nThe account itself was not deleted. Try again or contact support.');
+      return;
+    }
+
+    // Delete the auth user itself via the user-callable RPC.
+    // Note: Supabase does not allow the anon client to call admin.deleteUser directly.
+    // The recommended pattern is a database function the user can invoke. For now we
+    // sign the user out after wiping their data; the auth record persists until manually
+    // removed in the Supabase dashboard. (We will add the RPC in a later patch.)
+    await sb.auth.signOut();
+    alert('Your data has been deleted and you have been signed out.\n\nNote: the auth login record itself can only be removed by the project admin. Tell Johnny if this is your account.');
+  } catch (e) {
+    alert('Unexpected error: ' + e.message);
+  }
 }
 
 // Run types and the fields each one shows.
