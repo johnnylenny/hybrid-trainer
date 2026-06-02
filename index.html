@@ -1,7 +1,14 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.16.1 — race warm-up/cool-down breakout + iOS status-bar fix
+  HYBRID TRAINER v0.16.2 — Stats pace chart uses work-portion pace only
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.16.1:
+    - Stats pace chart now reflects the WORK portion of each run, never blended
+      with warm-up/cool-down. Tempo prefers the tempo (work) pace; race uses the
+      race effort (already separate from WU/CD); intervals get a derived pace by
+      averaging the logged rep splits (intervalWorkingPaceSeconds). No data shape
+      change. See drawPaceChart + intervalDistToMeters.
 
   What's new vs v0.16.0:
     - Race runs now log warm-up and cool-down apart from the race effort.
@@ -582,7 +589,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.16.1</small>
+      <small>v0.16.2</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -857,7 +864,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.16.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.16.2 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -3217,15 +3224,75 @@ function draw1RMChart(exName) {
   });
 }
 
+// Convert an interval rep-distance token ("400m", "800", "1km", "1.5mi") to meters.
+// A bare number is treated as meters (track-interval convention: 200/400/800/1600).
+function intervalDistToMeters(tok) {
+  if (!tok) return null;
+  const m = String(tok).trim().toLowerCase().match(/^([\d.]+)\s*(m|km|k|mi|mile|miles)?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = m[2] || 'm';
+  if (unit === 'm') return n;
+  if (unit === 'km' || unit === 'k') return n * 1000;
+  return n * 1609.344; // mi / mile / miles
+}
+
+// Average WORKING pace (seconds per display unit) for an intervals session,
+// derived from the logged rep splits — never diluted by warm-up/cool-down.
+// Reps are expanded in order from intervalSets and zipped with the splits; each
+// rep's split time becomes a pace using that rep's distance, then averaged.
+// Returns null when there are no parseable splits/distances, so those sessions
+// simply don't appear on the pace chart rather than plotting a wrong number.
+function intervalWorkingPaceSeconds(rd) {
+  if (!rd || !Array.isArray(rd.intervalSets) || !rd.intervalSets.length) return null;
+  const splits = parseSplitsToSeconds(rd.splits);
+  if (!splits || !splits.length) return null;
+  const repDists = [];
+  for (const set of rd.intervalSets) {
+    const reps = parseInt(set.reps, 10);
+    const dm = intervalDistToMeters(set.distance);
+    for (let i = 0; i < (reps > 0 ? reps : 1); i++) repDists.push(dm);
+  }
+  const unitMeters = settings.distanceUnit === 'km' ? 1000 : 1609.344;
+  const paces = [];
+  const n = Math.min(splits.length, repDists.length);
+  for (let i = 0; i < n; i++) {
+    const dm = repDists[i];
+    if (!dm) continue;
+    const distInUnit = dm / unitMeters;
+    if (distInUnit > 0) paces.push(splits[i] / distInUnit); // seconds per display unit
+  }
+  if (!paces.length) return null;
+  return paces.reduce((a, b) => a + b, 0) / paces.length;
+}
+
 function drawPaceChart(runType) {
   const colors = chartColors();
   const ctx = prepareCanvas('chart-pace');
   if (!ctx) return;
-  const rows = state.history
-    .filter(s => s.type === 'run' && s.runData && s.runData.runType === runType)
-    .map(s => ({ date: s.date, pace: paceToSeconds(s.runData.pace || s.runData.tempoPace) }))
-    .filter(r => r.pace !== null)
-    .sort((a, b) => a.date < b.date ? -1 : 1);
+  // Each run type uses its WORK-portion pace, never blended with warm-up/cool-down:
+  // - tempo: prefer the tempo (work) pace over any stray total pace
+  // - race:  pace IS the race effort (warm-up/cool-down are separate fields)
+  // - easy/long: a single pace
+  // - intervals: no single pace field, so derive one by averaging the rep splits
+  let rows;
+  if (runType === 'intervals') {
+    rows = state.history
+      .filter(s => s.type === 'run' && s.runData && s.runData.runType === 'intervals')
+      .map(s => ({ date: s.date, pace: intervalWorkingPaceSeconds(s.runData) }))
+      .filter(r => r.pace !== null)
+      .sort((a, b) => a.date < b.date ? -1 : 1);
+  } else {
+    const pickPace = runType === 'tempo'
+      ? (rd) => rd.tempoPace || rd.pace
+      : (rd) => rd.pace || rd.tempoPace;
+    rows = state.history
+      .filter(s => s.type === 'run' && s.runData && s.runData.runType === runType)
+      .map(s => ({ date: s.date, pace: paceToSeconds(pickPace(s.runData)) }))
+      .filter(r => r.pace !== null)
+      .sort((a, b) => a.date < b.date ? -1 : 1);
+  }
   if (rows.length === 0) { noData(ctx); return; }
   const opts = baseLineOptions(colors, 'pace (min/' + settings.distanceUnit + ')', { reverseY: true });
   opts.scales.y.ticks.callback = (v) => secondsToPace(v);
