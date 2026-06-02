@@ -24,13 +24,14 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 **Running**
 - Five run types with conditional fields: Easy/Z2, Tempo/Threshold, Intervals/Track, Long Run, Race
-- Different types show different fields (e.g. races show result)
 - Tempo runs track the work portion on its own: warm-up, tempo distance/time/pace, cool-down, plus totals
+- Race runs break out warm-up and cool-down from the race effort, so the pace reflects the race, not the easy miles around it
 - Interval runs log multiple sets — reps x distance @ goal time + recovery (e.g. 5x400 @ 1:30, then 2x200 @ 0:45)
 - Switching types preserves data, doesn't delete fields
 
 **Conditioning**
-- Free-form modality, total work, RPE, splits
+- Type-based like runs: Erg (Row/Bike/Ski), Sled/Carry, Ruck, Circuit/MetCon, and Other/General, each with its own fields
+- Switching type preserves data, doesn't delete fields
 
 **Stats**
 - Five charts: bodyweight, per-exercise progression, estimated 1RM (Epley), run pace trend, weekly volume by type
@@ -40,6 +41,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Sessions, templates, and settings sync between phone and laptop
 - Local-only mode: continue without an account, keep all data on your device
 - Sync indicator in the header tells you when changes are pushed to the cloud
+- Failed cloud writes are queued and retried automatically (on a timer, when the network returns, or when you refocus the tab) — they survive a page reload, so a dropped write is never lost
 
 **Profile** (new in v0.11)
 - Display name and avatar picker (5 emoji presets)
@@ -53,13 +55,14 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Sort and filter history by type, phase, name, and date range
 - Format validation flags impossible values; warnings catch missing or inconsistent data before saving
 - Cross-day session support for workouts that span midnight
-- Settings: theme (light/dark/auto), 24h vs 12h, weight units (lb/kg), distance units (mi/km), intensity tracking
+- Settings grouped into sections (Profile, Appearance, Units & tracking, Data, Danger zone): theme (light/dark/auto), 24h vs 12h, weight units (lb/kg), distance units (mi/km), intensity tracking
+- In-app modals and toasts throughout — no native browser popups
 - Export and import your data as JSON (with schema versioning)
 - Delete your cloud account from inside the app
 
 ## Status
 
-v0.16 — daily-driver prototype with cloud sync, user profiles, multi-type templates + a starter library, and detailed tempo/interval run logging. Works on phone and laptop, signed in or local-only.
+v0.19 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates + a starter library, detailed tempo/interval/race run logging, type-based conditioning, and custom in-app modals. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -90,21 +93,20 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 ## Roadmap
 
 **Near-term:**
-- Conditioning field cleanup (per-modality fields)
-- Polish: retry logic for failed cloud writes, conflict resolution
+- Conflict resolution for simultaneous edits on two devices
+- Conditioning templates for the new per-type fields
 
 **The reason this exists:**
 - Combined lifting + cardio fatigue score (the differentiator no other app does for hybrid athletes)
 
 **Long-term:**
-- Sharing with friends (read-only access to selected sessions)
-- Garmin import for runs
+- Pull workouts from Garmin / Strava / Apple Health (needs a small backend for OAuth)
 - Strava export for completed sessions
+- Sharing with friends (read-only access to selected sessions)
 - Hub-style dashboard aggregating training load across modalities
 
 ## Known limitations
 
-- No retry yet if a cloud write fails. The sync indicator turns red, but you'll need to edit and resave the affected session to push it again.
 - No conflict resolution: if you edit the same session on two devices simultaneously, last write wins.
 - Myo-rep and drop-set sequences are free text, not parsed into structured data
 - Autocomplete only suggests exercises you've previously logged
