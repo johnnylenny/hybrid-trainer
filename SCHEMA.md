@@ -2,15 +2,33 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 7
+## Current schema version: 8
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
+
+## Where data lives
+
+The app has two storage layers depending on whether you're signed in.
+
+**Local-only mode** (you chose "Continue without an account"):
+- Everything lives in your browser's `localStorage`
+- Two keys: `hybridTrainerV2` (sessions + templates + current session) and `hybridTrainerSettings`
+- Data never leaves the device
+
+**Cloud-sync mode** (signed in via Supabase auth):
+- Source of truth is the Supabase database (Postgres)
+- `localStorage` is still used as a fast local cache
+- Writes go to localStorage instantly, then to Supabase in the background
+- On sign-in, the cloud overwrites the local cache (or you're prompted to upload local data first)
+- On sign-out, the local cache is wiped to avoid leaking data between accounts
+
+The two layers use the same JS object shapes. The conversion to/from the Supabase row format is documented in the [Local ↔ Cloud mapping](#local--cloud-mapping) section below.
 
 ## Top-level export format
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "exportedAt": "2026-05-24T18:41:00.000Z",
   "settings": { ... },
   "templates": [ ... ],
@@ -34,9 +52,11 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 
 ```json
 {
+  "id": "a1b2c3d4-...",
   "date": "2026-04-13",
   "startTime": "18:41",
   "endTime": "20:21",
+  "endDate": "",
   "bodyweight": "205.25",
   "name": "BACK",
   "phase": "Hypertrophy",
@@ -50,6 +70,7 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 
 | Field | Type | Description |
 |---|---|---|
+| `id` | string (UUID) | Stable identifier for the session. Added in v8 to support cloud sync. Old sessions without an id get one assigned on first upload. |
 | `date` | string (YYYY-MM-DD) | Date of the session. |
 | `startTime` | string (HH:MM, 24h) | When the session started. Optional. |
 | `endTime` | string (HH:MM, 24h) | When the session ended. Optional. |
@@ -166,6 +187,7 @@ A template is a saved exercise list with the structure stripped of actual logged
 
 ```json
 {
+  "id": "a1b2c3d4-...",
   "name": "BACK",
   "type": "lifts",
   "exercises": [
@@ -182,7 +204,7 @@ A template is a saved exercise list with the structure stripped of actual logged
 }
 ```
 
-Templates only store exercise names and set types. They never store weights or reps.
+Templates only store exercise names and set types. They never store weights or reps. The `id` field was added in v8 alongside cloud sync; old templates without an id get one assigned on first upload.
 
 ## Settings object
 
@@ -191,6 +213,7 @@ Templates only store exercise names and set types. They never store weights or r
   "theme": "auto",
   "timeFormat": "24",
   "units": "lb",
+  "distanceUnit": "mi",
   "intensity": "rpe",
   "defaultPhase": ""
 }
@@ -201,9 +224,88 @@ Templates only store exercise names and set types. They never store weights or r
 | `theme` | string | `auto`, `light`, `dark` |
 | `timeFormat` | string | `24`, `12` |
 | `units` | string | `lb`, `kg` (label only, not converted) |
-| `intensity` | string | `off`, `rpe`, `rir` |
 | `distanceUnit` | string | `mi`, `km` (label only; pace pairs automatically) |
+| `intensity` | string | `off`, `rpe`, `rir` |
 | `defaultPhase` | string | Free text. |
+
+## Cloud database schema (Supabase)
+
+When signed in, data lives in three Postgres tables. Row Level Security ensures each user can only read/write their own rows.
+
+### `sessions` table
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | Same value as the local `id` field. |
+| `user_id` | uuid | FK to `auth.users(id)`. Cascade on delete. |
+| `date` | date | YYYY-MM-DD. |
+| `start_time` | text | Nullable. Local `startTime` → null if empty. |
+| `end_time` | text | Nullable. Local `endTime` → null if empty. |
+| `end_date` | date | Nullable. Local `endDate` → null if empty. |
+| `bodyweight` | text | Nullable. Local `bodyweight` → null if empty. |
+| `name` | text | Nullable. |
+| `phase` | text | Nullable. |
+| `type` | text | Constrained to `lifts`, `run`, `conditioning`. |
+| `exercises` | jsonb | Same array as local `exercises`. |
+| `run_data` | jsonb | Same object as local `runData`. |
+| `cond_data` | jsonb | Same object as local `condData`. |
+| `notes` | text | Defaults to empty string. |
+| `created_at` | timestamptz | Server-set on insert. |
+| `updated_at` | timestamptz | Updated on every write. |
+
+Indexes: `(user_id, date desc)`, `(user_id, type)`.
+
+### `templates` table
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | Same value as the local `id` field. |
+| `user_id` | uuid | FK to `auth.users(id)`. Cascade on delete. |
+| `name` | text | |
+| `type` | text | Currently always `lifts`. |
+| `exercises` | jsonb | Same array as local. |
+| `created_at`, `updated_at` | timestamptz | |
+
+Index: `(user_id)`.
+
+### `user_settings` table
+
+One row per user. Primary key is `user_id` (not a separate id), so there's at most one settings row per account.
+
+| Column | Type | Maps to local |
+|---|---|---|
+| `user_id` | uuid (PK) | — |
+| `theme` | text | `theme` |
+| `time_format` | text | `timeFormat` |
+| `units` | text | `units` |
+| `distance_unit` | text | `distanceUnit` |
+| `intensity` | text | `intensity` |
+| `default_phase` | text | `defaultPhase` |
+| `updated_at` | timestamptz | — |
+
+### Row Level Security
+
+All three tables have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for.
+
+## Local ↔ Cloud mapping
+
+The local JS shape and the database row shape are not identical. The app has converter functions (`sessionToRow`, `rowToSession`, etc.) that translate between them. Key differences:
+
+| Local (camelCase) | Cloud (snake_case) |
+|---|---|
+| `startTime` | `start_time` |
+| `endTime` | `end_time` |
+| `endDate` | `end_date` |
+| `runData` | `run_data` |
+| `condData` | `cond_data` |
+| `timeFormat` | `time_format` |
+| `distanceUnit` | `distance_unit` |
+| `defaultPhase` | `default_phase` |
+
+Other notes:
+- Empty strings in local fields become `null` in the database (Postgres null is more meaningful than empty string).
+- `null` from the database becomes `""` (empty string) in local objects, to match the rest of the app's "everything is a string" convention.
+- The `user_id` field exists only in the database. Local objects don't carry it because the entire local store belongs to one user already.
 
 ## Conventions and gotchas
 
@@ -214,11 +316,13 @@ Templates only store exercise names and set types. They never store weights or r
 - **Runs always have `runType` from v0.5 onward.** Old data is treated as `easy`.
 - **Switching run types preserves orphan data.** If you log a tempo run with HR, then switch to intervals (which doesn't display HR), the HR value stays in the JSON. It's just hidden from the UI. This is intentional — no data loss from type changes.
 - **History is ordered most recent first** (`history[0]` is the newest session).
-- **The `currentSession` is the live in-progress session.** When the user saves, it gets pushed onto `history` and a new empty one takes its place.
+- **The `currentSession` is the live in-progress session.** When the user saves, it gets pushed onto `history` and a new empty one takes its place. `currentSession` is NOT synced to the cloud; only saved sessions are.
+- **Sessions and templates carry a UUID `id` from v8 onward.** Old data without an id gets one assigned on first upload to the cloud.
 
 ## Schema version history
 
-- **v7** (current) — Added optional `endDate` field for sessions crossing midnight. Added `distanceUnit` setting (mi/km) affecting run field labels and pace. Added inline format validation (visual red-border only, never blocks saving) and pre-save warnings for missing or inconsistent data. Backwards compatible: sessions without `endDate` are treated as same-day.
+- **v8** (current) — Added stable UUID `id` field to sessions and templates to support cloud sync. Added cloud database schema (Supabase tables: `sessions`, `templates`, `user_settings`) with Row Level Security. Local ↔ cloud field name mapping documented. Backwards compatible: old data without `id` gets one assigned on first cloud upload.
+- **v7** — Added optional `endDate` field for sessions crossing midnight. Added `distanceUnit` setting (mi/km) affecting run field labels and pace. Added inline format validation (visual red-border only, never blocks saving) and pre-save warnings for missing or inconsistent data. Backwards compatible: sessions without `endDate` are treated as same-day.
 - **v6** — Cleaned up phantom defaults: `runData` and `condData` are now only populated for sessions whose `type` matches. Added session-type-switch guard in the UI to warn before hiding data. Backwards compatible: old files with phantom defaults still import fine.
 - **v5** — Added `runType` field to run sessions with five types (easy, tempo, intervals, long, race), each with their own field set. Backwards compatible with v4: old runs without `runType` are treated as easy.
 - **v4** — Added `schemaVersion`, `exportedAt`, optional `rir` field on working sets, and `settings` to exports.
