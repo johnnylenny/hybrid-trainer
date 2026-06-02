@@ -1,9 +1,47 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.13.0 — in-tab template builder + UI fixes
+  HYBRID TRAINER v0.15.0 — starter template library (schema v10)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.12.3:
+  REQUIRES one-time Supabase migrations (see below). Run both in the
+  Supabase SQL editor before deploying:
+
+    -- 1. run/conditioning columns on user templates (v0.14)
+    alter table templates
+      add column if not exists run_data jsonb,
+      add column if not exists cond_data jsonb;
+
+    -- 2. read-only starter-template library (v0.15)
+    create table if not exists starter_templates (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      type text not null check (type in ('lifts','run','conditioning')),
+      category text,
+      exercises jsonb default '[]'::jsonb,
+      run_data jsonb,
+      cond_data jsonb,
+      sort_order int default 0,
+      created_at timestamptz default now()
+    );
+    alter table starter_templates enable row level security;
+    create policy "starter_templates readable by anyone"
+      on starter_templates for select using (true);
+
+  What's new vs v0.14.0:
+    - "Browse starter templates" on the Templates tab lists presets from the
+      starter_templates table; "Add" copies one into your own templates.
+      See loadStarterTemplates / addStarterToMyTemplates / starterSectionHtml.
+
+  What's new in v0.14.0 vs v0.13.1:
+    - Templates now support all three types. The builder has a type picker:
+      Lifts (exercise list), Run (run type + target distance/pace), and
+      Conditioning (modality + target work). Loader + "Save as Template"
+      handle each type. See templateDraft* / loadTemplateIntoSession.
+    - Template row mappers send run_data/cond_data only for run/cond
+      templates, so lifts templates keep syncing even pre-migration.
+
+  v0.13.1: De-monospaced <pre> lists; selecting a template now adopts its name.
+  v0.13.0 vs v0.12.3:
     - In-tab template builder: "+ New template" on the Templates tab opens an
       editor (name + exercises + warmup/working/myo/drop chips) so you can
       create a template without going to Log. Lifts-only (templates are
@@ -301,7 +339,7 @@
     margin-left: 4px; vertical-align: middle;
   }
   .header-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  pre { white-space: pre-wrap; font-size: 0.82rem; color: var(--text-muted); font-family: ui-monospace, monospace; line-height: 1.5; }
+  pre { white-space: pre-wrap; font-size: 0.9rem; color: var(--text-muted); font-family: inherit; line-height: 1.6; }
   .autocomplete { position: relative; flex: 1; }
   .autocomplete-list {
     position: absolute; top: 100%; left: 0; right: 0;
@@ -522,7 +560,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.13.0</small>
+      <small>v0.15.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -797,7 +835,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.13.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.15.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -828,7 +866,7 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1459,7 +1497,7 @@ function rowToSession(row) {
   };
 }
 function templateToRow(template, userId) {
-  return {
+  const row = {
     id: template.id || crypto.randomUUID(),
     user_id: userId,
     name: template.name,
@@ -1467,9 +1505,20 @@ function templateToRow(template, userId) {
     exercises: template.exercises || [],
     updated_at: new Date().toISOString()
   };
+  // Only attach the new columns for run/conditioning templates. Lifts
+  // templates send the exact old shape, so they keep syncing even before
+  // the run_data/cond_data migration is run on the templates table.
+  if (template.runData) row.run_data = template.runData;
+  if (template.condData) row.cond_data = template.condData;
+  return row;
 }
 function rowToTemplate(row) {
-  return { id: row.id, name: row.name, type: row.type, exercises: row.exercises || [] };
+  return {
+    id: row.id, name: row.name, type: row.type,
+    exercises: row.exercises || [],
+    runData: row.run_data || null,
+    condData: row.cond_data || null
+  };
 }
 function settingsToRow(s, userId) {
   return {
@@ -2251,45 +2300,83 @@ function summarizeExerciseText(ex) {
 function saveCurrentAsTemplate() {
   const name = prompt('Template name?', state.currentSession.name || 'New Template');
   if (!name) return;
-  const tplExercises = state.currentSession.exercises.map(ex => ({
-    name: ex.name,
-    sets: ex.sets.map(s => ({ type: s.type })),
-    notes: ''
-  }));
-  const newTemplate = { id: crypto.randomUUID(), name, type: state.currentSession.type, exercises: tplExercises };
+  const type = state.currentSession.type;
+  let newTemplate;
+  if (type === 'run') {
+    const rd = state.currentSession.runData || {};
+    newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
+      runData: { runType: rd.runType || 'easy', distance: rd.distance || '', pace: rd.pace || '' } };
+  } else if (type === 'conditioning') {
+    const cd = state.currentSession.condData || {};
+    newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
+      condData: { modality: cd.modality || '', total: cd.total || '' } };
+  } else {
+    const tplExercises = state.currentSession.exercises.map(ex => ({
+      name: ex.name, sets: ex.sets.map(s => ({ type: s.type })), notes: ''
+    }));
+    newTemplate = { id: crypto.randomUUID(), name, type: 'lifts', exercises: tplExercises };
+  }
   state.templates.push(newTemplate);
   saveState();
   cloudPushTemplate(newTemplate);
   alert('Template saved.'); renderTemplates();
+}
+// True if the current session has any content worth warning about before replace.
+function sessionHasContent() {
+  const s = state.currentSession;
+  if (s.exercises && s.exercises.length > 0) return true;
+  if (s.runData && Object.keys(s.runData).some(k => k !== 'runType' && s.runData[k])) return true;
+  if (s.condData && Object.keys(s.condData).some(k => s.condData[k])) return true;
+  return false;
 }
 function loadTemplateIntoSession() {
   const idx = document.getElementById('template-picker').value;
   if (idx === '') return;
   const tpl = state.templates[parseInt(idx)];
   if (!tpl) return;
-  if (state.currentSession.exercises.length > 0 && !confirm('Replace current exercises with template?')) return;
+  if (sessionHasContent() && !confirm('Replace the current session with this template?')) return;
   state.currentSession.type = tpl.type;
-  state.currentSession.name = state.currentSession.name || tpl.name;
-  state.currentSession.exercises = tpl.exercises.map(ex => ({
-    name: ex.name,
-    sets: (ex.sets || []).map(s => ({ type: s.type })),
-    notes: ''
-  }));
+  // Always adopt the selected template's name. (Old code kept the first
+  // template's name when you switched to a different one.)
+  state.currentSession.name = tpl.name;
+  // Reset all three payloads, then fill the one for this template's type.
+  state.currentSession.exercises = [];
+  state.currentSession.runData = {};
+  state.currentSession.condData = {};
+  if (tpl.type === 'run') {
+    state.currentSession.runData = Object.assign({}, tpl.runData || {});
+    if (!state.currentSession.runData.runType) state.currentSession.runData.runType = 'easy';
+  } else if (tpl.type === 'conditioning') {
+    state.currentSession.condData = Object.assign({}, tpl.condData || {});
+  } else {
+    state.currentSession.exercises = (tpl.exercises || []).map(ex => ({
+      name: ex.name, sets: (ex.sets || []).map(s => ({ type: s.type })), notes: ''
+    }));
+  }
   document.getElementById('session-type').value = tpl.type;
   document.getElementById('session-name').value = state.currentSession.name;
   saveState(); onSessionTypeChange();
   document.getElementById('template-picker').value = '';
 }
 // =====================================================================
-// IN-TAB TEMPLATE BUILDER (v0.13)
+// IN-TAB TEMPLATE BUILDER (v0.13 lifts-only; v0.14 adds run/conditioning)
 // templateDraft holds the template being built. null = not building.
-// Templates are lift exercise lists, so the builder is lifts-only.
+// Shape: { name, type, exercises:[{name,sets:[{type}]}],
+//          runData:{runType,distance,pace}, condData:{modality,total} }
 // =====================================================================
-let templateDraft = null; // { name, type:'lifts', exercises:[{name, sets:[{type}]}] }
+let templateDraft = null;
 const SET_TYPE_LABEL = { warmup: 'Warmup', working: 'Set', myorep: 'Myo', drop: 'Drop' };
 
+function emptyTemplateDraft() {
+  return {
+    name: '', type: 'lifts',
+    exercises: [{ name: '', sets: [] }],
+    runData: { runType: 'easy', distance: '', pace: '' },
+    condData: { modality: '', total: '' }
+  };
+}
 function startNewTemplate() {
-  templateDraft = { name: '', type: 'lifts', exercises: [{ name: '', sets: [] }] };
+  templateDraft = emptyTemplateDraft();
   renderTemplates();
   setTimeout(() => { const el = document.getElementById('tpl-draft-name'); if (el) el.focus(); }, 50);
 }
@@ -2297,8 +2384,8 @@ function cancelTemplateDraft() {
   templateDraft = null;
   renderTemplates();
 }
-// Read the text inputs back into the draft BEFORE any re-render, so typed
-// names aren't lost when you click a set-type chip or add another exercise.
+// Read the inputs back into the draft BEFORE any re-render, so typed text
+// isn't lost when you click a set-type chip, add an exercise, or switch type.
 function syncTemplateDraftFromDOM() {
   if (!templateDraft) return;
   const nameEl = document.getElementById('tpl-draft-name');
@@ -2307,6 +2394,17 @@ function syncTemplateDraftFromDOM() {
     const exEl = document.getElementById('tpl-draft-ex-' + i);
     if (exEl) ex.name = exEl.value;
   });
+  const rt = document.getElementById('tpl-draft-runtype'); if (rt) templateDraft.runData.runType = rt.value;
+  const di = document.getElementById('tpl-draft-distance'); if (di) templateDraft.runData.distance = di.value;
+  const pa = document.getElementById('tpl-draft-pace'); if (pa) templateDraft.runData.pace = pa.value;
+  const mo = document.getElementById('tpl-draft-modality'); if (mo) templateDraft.condData.modality = mo.value;
+  const to = document.getElementById('tpl-draft-total'); if (to) templateDraft.condData.total = to.value;
+}
+function templateDraftSetType(type) {
+  syncTemplateDraftFromDOM();
+  templateDraft.type = type;
+  if (type === 'lifts' && templateDraft.exercises.length === 0) templateDraft.exercises.push({ name: '', sets: [] });
+  renderTemplates();
 }
 function templateDraftAddExercise() {
   syncTemplateDraftFromDOM();
@@ -2333,18 +2431,75 @@ function saveTemplateDraft() {
   syncTemplateDraftFromDOM();
   const name = (templateDraft.name || '').trim();
   if (!name) { alert('Give your template a name first.'); return; }
-  const exercises = templateDraft.exercises
-    .filter(ex => (ex.name || '').trim() !== '')
-    .map(ex => ({ name: ex.name.trim(), sets: ex.sets.map(s => ({ type: s.type })), notes: '' }));
-  if (exercises.length === 0) { alert('Add at least one exercise with a name.'); return; }
-  const newTemplate = { id: crypto.randomUUID(), name, type: 'lifts', exercises };
+  const id = crypto.randomUUID();
+  let newTemplate;
+  if (templateDraft.type === 'run') {
+    newTemplate = { id, name, type: 'run', exercises: [], runData: {
+      runType: templateDraft.runData.runType || 'easy',
+      distance: (templateDraft.runData.distance || '').trim(),
+      pace: (templateDraft.runData.pace || '').trim()
+    } };
+  } else if (templateDraft.type === 'conditioning') {
+    const modality = (templateDraft.condData.modality || '').trim();
+    if (!modality) { alert('Add a modality (Row, Bike, etc.).'); return; }
+    newTemplate = { id, name, type: 'conditioning', exercises: [], condData: {
+      modality, total: (templateDraft.condData.total || '').trim()
+    } };
+  } else {
+    const exercises = templateDraft.exercises
+      .filter(ex => (ex.name || '').trim() !== '')
+      .map(ex => ({ name: ex.name.trim(), sets: ex.sets.map(s => ({ type: s.type })), notes: '' }));
+    if (exercises.length === 0) { alert('Add at least one exercise with a name.'); return; }
+    newTemplate = { id, name, type: 'lifts', exercises };
+  }
   state.templates.push(newTemplate);
   saveState();
   cloudPushTemplate(newTemplate);
   templateDraft = null;
   renderTemplates();
 }
-function templateDraftHtml() {
+// A one-line summary of a saved template, by type.
+function templateSummaryText(t) {
+  if (t.type === 'run') {
+    const rd = t.runData || {};
+    const bits = [(RUN_TYPES[rd.runType] || {}).name || rd.runType || 'Run'];
+    if (rd.distance) bits.push('target ' + rd.distance);
+    if (rd.pace) bits.push('@ ' + rd.pace);
+    return bits.join(' · ');
+  }
+  if (t.type === 'conditioning') {
+    const cd = t.condData || {};
+    const bits = [];
+    if (cd.modality) bits.push(cd.modality);
+    if (cd.total) bits.push('target ' + cd.total);
+    return bits.length ? bits.join(' · ') : 'Conditioning';
+  }
+  return (t.exercises || []).map(e => `• ${e.name} — ${(e.sets||[]).map(s=>s.type).join(', ')}`).join('\n');
+}
+function templateDraftBodyHtml() {
+  const type = templateDraft.type;
+  if (type === 'run') {
+    const rd = templateDraft.runData || {};
+    const opts = Object.keys(RUN_TYPES).map(k =>
+      `<option value="${k}" ${rd.runType === k ? 'selected' : ''}>${escapeHtml(RUN_TYPES[k].name)}</option>`).join('');
+    return `
+      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">Pre-set the run type and optional targets. You fill the real numbers each session.</p>
+      <div class="field"><label>Run type</label><select id="tpl-draft-runtype">${opts}</select></div>
+      <div class="row">
+        <div class="field"><label>Target distance</label><input type="text" id="tpl-draft-distance" placeholder="5" value="${escapeHtml(rd.distance || '')}"></div>
+        <div class="field"><label>Target pace</label><input type="text" id="tpl-draft-pace" placeholder="4:30" value="${escapeHtml(rd.pace || '')}"></div>
+      </div>`;
+  }
+  if (type === 'conditioning') {
+    const cd = templateDraft.condData || {};
+    return `
+      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">Pre-set the modality and optional target work.</p>
+      <div class="row">
+        <div class="field"><label>Modality</label><input type="text" id="tpl-draft-modality" placeholder="Row, Bike, AirDyne" value="${escapeHtml(cd.modality || '')}"></div>
+        <div class="field"><label>Target work</label><input type="text" id="tpl-draft-total" placeholder="5x500m" value="${escapeHtml(cd.total || '')}"></div>
+      </div>`;
+  }
+  // lifts
   const exRows = templateDraft.exercises.map((ex, i) => {
     const chips = ex.sets.map((s, j) =>
       `<button class="tag" style="cursor:pointer; border:none" onclick="templateDraftRemoveSet(${i},${j})" title="Remove this set">${SET_TYPE_LABEL[s.type] || s.type} &times;</button>`
@@ -2365,14 +2520,27 @@ function templateDraftHtml() {
       </div>`;
   }).join('');
   return `
+    <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">A reusable list of lift exercises and their set types.</p>
+    ${exRows}
+    <button class="btn-secondary" style="width:100%; margin-bottom:10px" onclick="templateDraftAddExercise()">+ Add exercise</button>`;
+}
+function templateDraftHtml() {
+  const type = templateDraft.type;
+  return `
     <div class="card">
       <div class="field">
         <label>Template name</label>
         <input type="text" id="tpl-draft-name" placeholder="e.g. Push Day" value="${escapeHtml(templateDraft.name)}">
       </div>
-      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">A reusable list of lift exercises and their set types.</p>
-      ${exRows}
-      <button class="btn-secondary" style="width:100%; margin-bottom:10px" onclick="templateDraftAddExercise()">+ Add exercise</button>
+      <div class="field">
+        <label>Template type</label>
+        <select id="tpl-draft-type" onchange="templateDraftSetType(this.value)">
+          <option value="lifts" ${type === 'lifts' ? 'selected' : ''}>Lifts</option>
+          <option value="run" ${type === 'run' ? 'selected' : ''}>Run</option>
+          <option value="conditioning" ${type === 'conditioning' ? 'selected' : ''}>Conditioning</option>
+        </select>
+      </div>
+      ${templateDraftBodyHtml()}
       <div class="btn-group">
         <button class="btn" onclick="saveTemplateDraft()">Save template</button>
         <button class="btn-secondary" onclick="cancelTemplateDraft()">Cancel</button>
@@ -2380,15 +2548,78 @@ function templateDraftHtml() {
     </div>`;
 }
 
+// =====================================================================
+// STARTER TEMPLATE LIBRARY (v0.15)
+// A read-only Supabase table of preset templates anyone can browse and
+// copy into their own templates. Lazy-loaded on first "Browse".
+// =====================================================================
+let starterTemplates = [];
+let starterLoaded = false;   // did the last fetch succeed?
+let starterShown = false;    // is the browse section expanded?
+async function loadStarterTemplates() {
+  if (!sb) { starterLoaded = false; return; }
+  try {
+    const { data, error } = await sb.from('starter_templates').select('*').order('sort_order');
+    if (error) throw error;
+    starterTemplates = (data || []).map(r => ({
+      id: r.id, name: r.name, type: r.type, category: r.category || '',
+      exercises: r.exercises || [], runData: r.run_data || null, condData: r.cond_data || null
+    }));
+    starterLoaded = true;
+  } catch (e) {
+    console.error('loadStarterTemplates failed:', e);
+    starterLoaded = false;
+  }
+}
+async function toggleStarterTemplates() {
+  starterShown = !starterShown;
+  if (starterShown && !starterLoaded) await loadStarterTemplates();
+  renderTemplates();
+}
+function addStarterToMyTemplates(id) {
+  const s = starterTemplates.find(t => t.id === id);
+  if (!s) return;
+  const copy = { id: crypto.randomUUID(), name: s.name, type: s.type, exercises: s.exercises || [] };
+  if (s.runData) copy.runData = s.runData;
+  if (s.condData) copy.condData = s.condData;
+  state.templates.push(copy);
+  saveState();
+  cloudPushTemplate(copy);
+  alert('Added "' + s.name + '" to your templates.');
+  renderTemplates();
+}
+function starterSectionHtml() {
+  if (!starterShown) return '';
+  if (!starterLoaded) {
+    return `<div class="card"><p class="muted">Couldn't load starter templates. If you just set this up, make sure the <code>starter_templates</code> table exists in Supabase.</p></div>`;
+  }
+  if (starterTemplates.length === 0) {
+    return `<div class="card"><p class="muted">No starter templates available yet.</p></div>`;
+  }
+  return '<h3 style="margin:6px 0 8px">Starter templates</h3>' + starterTemplates.map(s => `
+    <div class="card">
+      <div class="header-row" style="margin-bottom:8px">
+        <h3>${escapeHtml(s.name)} <span class="tag">${s.type}</span>${s.category ? ` <span class="tag">${escapeHtml(s.category)}</span>` : ''}</h3>
+        <button class="btn-small" onclick="addStarterToMyTemplates('${s.id}')">Add</button>
+      </div>
+      <pre>${escapeHtml(templateSummaryText(s))}</pre>
+    </div>`).join('');
+}
+
 function renderTemplates() {
   const c = document.getElementById('templates-list');
-  // Top: either the active builder, or a button to start one.
+  // Top: either the active builder, or the new/browse buttons.
   const topHtml = templateDraft
     ? templateDraftHtml()
-    : '<button class="btn" style="margin-bottom:14px" onclick="startNewTemplate()">+ New template</button>';
-  // Below: the saved templates list (or an empty hint).
+    : `<button class="btn" style="margin-bottom:14px" onclick="startNewTemplate()">+ New template</button>
+       <button class="btn-secondary" style="margin:0 0 14px 8px" onclick="toggleStarterTemplates()">${starterShown ? 'Hide' : 'Browse'} starter templates</button>`;
+  // Optional starter-library section (only when expanded and not building).
+  const starterHtml = templateDraft ? '' : starterSectionHtml();
+  // Below: the user's saved templates (or an empty hint).
+  const yourHeader = (!templateDraft && state.templates.length > 0 && starterShown)
+    ? '<h3 style="margin:14px 0 8px">Your templates</h3>' : '';
   const listHtml = state.templates.length === 0
-    ? '<div class="card"><p class="muted">No templates yet. Tap "+ New template" above, or build a session on Log and tap "Save as Template".</p></div>'
+    ? '<div class="card"><p class="muted">No templates yet. Tap "+ New template" above, browse starter templates, or build a session on Log and tap "Save as Template".</p></div>'
     : state.templates.map((t, i) => `
       <div class="card">
         <div class="header-row" style="margin-bottom:8px">
@@ -2398,10 +2629,10 @@ function renderTemplates() {
             <button class="btn-danger" onclick="deleteTemplate(${i})">Delete</button>
           </div>
         </div>
-        <pre>${escapeHtml((t.exercises || []).map(e => `• ${e.name} — ${(e.sets||[]).map(s=>s.type).join(', ')}`).join('\n'))}</pre>
+        <pre>${escapeHtml(templateSummaryText(t))}</pre>
       </div>
     `).join('');
-  c.innerHTML = topHtml + listHtml;
+  c.innerHTML = topHtml + starterHtml + yourHeader + listHtml;
 }
 function renameTemplate(i) {
   const name = prompt('New name?', state.templates[i].name);
