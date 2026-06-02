@@ -21,3 +21,11 @@ Desktop.ini
 # Personal backups (don't commit your workout data to a public repo)
 *.backup.json
 hybrid-trainer-backup-*.json
+
+# Claude Code dev tooling + local settings (not part of the live app)
+.claude/
+
+# Private working docs kept local, never pushed to the public repo
+CLAUDE.md
+IDEAS.md
+_local/
