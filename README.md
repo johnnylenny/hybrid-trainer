@@ -24,7 +24,9 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 **Running**
 - Five run types with conditional fields: Easy/Z2, Tempo/Threshold, Intervals/Track, Long Run, Race
-- Different types show different fields (e.g. intervals shows splits, races show result)
+- Different types show different fields (e.g. races show result)
+- Tempo runs track the work portion on its own: warm-up, tempo distance/time/pace, cool-down, plus totals
+- Interval runs log multiple sets — reps x distance @ goal time + recovery (e.g. 5x400 @ 1:30, then 2x200 @ 0:45)
 - Switching types preserves data, doesn't delete fields
 
 **Conditioning**
@@ -45,7 +47,8 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Stored in the cloud, syncs across devices
 
 **Everywhere**
-- Save exercise lists as reusable templates
+- Reusable templates for all three session types: lifts (exercise lists), run (run type + target distance/pace), and conditioning (modality + target work). Build them in the Templates tab, or save the current session as one.
+- Browse a starter-template library and add presets to your own templates with one tap
 - Edit any saved session (tap it in History)
 - Sort and filter history by type, phase, name, and date range
 - Format validation flags impossible values; warnings catch missing or inconsistent data before saving
@@ -56,7 +59,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 ## Status
 
-v0.11 — daily-driver prototype with cloud sync and user profiles. Works on phone and laptop, signed in or local-only.
+v0.16 — daily-driver prototype with cloud sync, user profiles, multi-type templates + a starter library, and detailed tempo/interval run logging. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
