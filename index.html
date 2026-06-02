@@ -1,19 +1,21 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.12.3 — no more startup nag + template-first start
+  HYBRID TRAINER v0.13.0 — in-tab template builder + UI fixes
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.12.2:
-    - Removed the "Your account already has data..." confirm() that fired on
-      EVERY startup. Boot now reconciles local + cloud silently: cloud is the
-      source of truth, but any local-only sessions/templates (e.g. a save that
-      failed to sync) are pushed up first so nothing is ever lost. No prompt.
-    - Session empty state is now template-first: when you have templates,
-      "Load a template" is the primary action and "Add exercise" is secondary.
-      When you have none, it prompts "Create a workout plan".
+  What's new vs v0.12.3:
+    - In-tab template builder: "+ New template" on the Templates tab opens an
+      editor (name + exercises + warmup/working/myo/drop chips) so you can
+      create a template without going to Log. Lifts-only (templates are
+      exercise lists). See renderTemplates / templateDraft* functions.
+    - Inline "+ Add exercise" button at the bottom of the exercises column.
+      Replaces the floating "+" FAB, which was hard to find on desktop. FAB
+      is now permanently hidden.
+    - Added a browser-tab favicon (<link rel="icon"> -> icon-192.png).
 
-  v0.12.2: Removed the duplicate Export/Import buttons from the page header
-  (they already live in Settings).
+  v0.12.3: Removed the every-startup "account already has data" confirm()
+  (boot reconciles local+cloud silently now). Template-first session empty state.
+  v0.12.2: Removed the duplicate Export/Import buttons from the header.
 
   Schema unchanged.
 -->
@@ -24,6 +26,9 @@
 <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Hybrid Trainer</title>
+
+<!-- Browser-tab favicon (the little logo next to the page title in the tab) -->
+<link rel="icon" type="image/png" href="icon-192.png">
 
 <!-- PWA manifest (Android, Chrome, modern browsers) -->
 <link rel="manifest" href="manifest.json">
@@ -517,7 +522,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.12.3</small>
+      <small>v0.13.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -792,7 +797,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.12.3 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.13.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1685,9 +1690,9 @@ document.querySelectorAll('nav.bottom-tabs button').forEach(btn => {
   });
 });
 function updateFabVisibility() {
-  const onLog = document.getElementById('screen-log').classList.contains('active');
-  const isLifts = state.currentSession && state.currentSession.type === 'lifts';
-  document.getElementById('fab-add').style.display = (onLog && isLifts) ? 'flex' : 'none';
+  // The floating "+" was hard to find on desktop. Replaced by an inline
+  // "+ Add exercise" button in the exercises column, so keep the FAB hidden.
+  document.getElementById('fab-add').style.display = 'none';
 }
 
 function renderLog() {
@@ -2014,7 +2019,10 @@ function renderExercises() {
     }
     return;
   }
-  area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i, exs.length)).join('');
+  // Inline "+ Add exercise" at the bottom of the column. Replaces the old
+  // floating "+" button, which was easy to miss on desktop.
+  area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i, exs.length)).join('') +
+    `<button class="btn-secondary" style="width:100%; margin-top:4px;" onclick="addExercise()">+ Add exercise</button>`;
   exs.forEach((_, i) => wireAutocomplete(i));
 }
 
@@ -2272,24 +2280,128 @@ function loadTemplateIntoSession() {
   saveState(); onSessionTypeChange();
   document.getElementById('template-picker').value = '';
 }
+// =====================================================================
+// IN-TAB TEMPLATE BUILDER (v0.13)
+// templateDraft holds the template being built. null = not building.
+// Templates are lift exercise lists, so the builder is lifts-only.
+// =====================================================================
+let templateDraft = null; // { name, type:'lifts', exercises:[{name, sets:[{type}]}] }
+const SET_TYPE_LABEL = { warmup: 'Warmup', working: 'Set', myorep: 'Myo', drop: 'Drop' };
+
+function startNewTemplate() {
+  templateDraft = { name: '', type: 'lifts', exercises: [{ name: '', sets: [] }] };
+  renderTemplates();
+  setTimeout(() => { const el = document.getElementById('tpl-draft-name'); if (el) el.focus(); }, 50);
+}
+function cancelTemplateDraft() {
+  templateDraft = null;
+  renderTemplates();
+}
+// Read the text inputs back into the draft BEFORE any re-render, so typed
+// names aren't lost when you click a set-type chip or add another exercise.
+function syncTemplateDraftFromDOM() {
+  if (!templateDraft) return;
+  const nameEl = document.getElementById('tpl-draft-name');
+  if (nameEl) templateDraft.name = nameEl.value;
+  templateDraft.exercises.forEach((ex, i) => {
+    const exEl = document.getElementById('tpl-draft-ex-' + i);
+    if (exEl) ex.name = exEl.value;
+  });
+}
+function templateDraftAddExercise() {
+  syncTemplateDraftFromDOM();
+  templateDraft.exercises.push({ name: '', sets: [] });
+  renderTemplates();
+}
+function templateDraftRemoveExercise(i) {
+  syncTemplateDraftFromDOM();
+  templateDraft.exercises.splice(i, 1);
+  if (templateDraft.exercises.length === 0) templateDraft.exercises.push({ name: '', sets: [] });
+  renderTemplates();
+}
+function templateDraftAddSet(i, type) {
+  syncTemplateDraftFromDOM();
+  templateDraft.exercises[i].sets.push({ type });
+  renderTemplates();
+}
+function templateDraftRemoveSet(i, j) {
+  syncTemplateDraftFromDOM();
+  templateDraft.exercises[i].sets.splice(j, 1);
+  renderTemplates();
+}
+function saveTemplateDraft() {
+  syncTemplateDraftFromDOM();
+  const name = (templateDraft.name || '').trim();
+  if (!name) { alert('Give your template a name first.'); return; }
+  const exercises = templateDraft.exercises
+    .filter(ex => (ex.name || '').trim() !== '')
+    .map(ex => ({ name: ex.name.trim(), sets: ex.sets.map(s => ({ type: s.type })), notes: '' }));
+  if (exercises.length === 0) { alert('Add at least one exercise with a name.'); return; }
+  const newTemplate = { id: crypto.randomUUID(), name, type: 'lifts', exercises };
+  state.templates.push(newTemplate);
+  saveState();
+  cloudPushTemplate(newTemplate);
+  templateDraft = null;
+  renderTemplates();
+}
+function templateDraftHtml() {
+  const exRows = templateDraft.exercises.map((ex, i) => {
+    const chips = ex.sets.map((s, j) =>
+      `<button class="tag" style="cursor:pointer; border:none" onclick="templateDraftRemoveSet(${i},${j})" title="Remove this set">${SET_TYPE_LABEL[s.type] || s.type} &times;</button>`
+    ).join(' ');
+    return `
+      <div class="card compact" style="margin-bottom:8px">
+        <div class="header-row" style="margin-bottom:6px">
+          <input type="text" id="tpl-draft-ex-${i}" placeholder="Exercise name" value="${escapeHtml(ex.name)}" style="flex:1; margin-right:8px">
+          <button class="btn-small" onclick="templateDraftRemoveExercise(${i})" title="Remove exercise">&times;</button>
+        </div>
+        <div style="margin-bottom:6px">${chips || '<span class="muted" style="font-size:0.8rem">No sets yet — add some below</span>'}</div>
+        <div class="btn-group">
+          <button class="btn-small" onclick="templateDraftAddSet(${i},'warmup')">+ Warmup</button>
+          <button class="btn-small" onclick="templateDraftAddSet(${i},'working')">+ Set</button>
+          <button class="btn-small" onclick="templateDraftAddSet(${i},'myorep')">+ Myo</button>
+          <button class="btn-small" onclick="templateDraftAddSet(${i},'drop')">+ Drop</button>
+        </div>
+      </div>`;
+  }).join('');
+  return `
+    <div class="card">
+      <div class="field">
+        <label>Template name</label>
+        <input type="text" id="tpl-draft-name" placeholder="e.g. Push Day" value="${escapeHtml(templateDraft.name)}">
+      </div>
+      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">A reusable list of lift exercises and their set types.</p>
+      ${exRows}
+      <button class="btn-secondary" style="width:100%; margin-bottom:10px" onclick="templateDraftAddExercise()">+ Add exercise</button>
+      <div class="btn-group">
+        <button class="btn" onclick="saveTemplateDraft()">Save template</button>
+        <button class="btn-secondary" onclick="cancelTemplateDraft()">Cancel</button>
+      </div>
+    </div>`;
+}
+
 function renderTemplates() {
   const c = document.getElementById('templates-list');
-  if (state.templates.length === 0) {
-    c.innerHTML = '<div class="card"><p class="muted">No templates yet. Build a session on Log and tap "Save as Template".</p></div>';
-    return;
-  }
-  c.innerHTML = state.templates.map((t, i) => `
-    <div class="card">
-      <div class="header-row" style="margin-bottom:8px">
-        <h3>${escapeHtml(t.name)} <span class="tag">${t.type}</span></h3>
-        <div class="btn-group">
-          <button class="btn-small" onclick="renameTemplate(${i})">Rename</button>
-          <button class="btn-danger" onclick="deleteTemplate(${i})">Delete</button>
+  // Top: either the active builder, or a button to start one.
+  const topHtml = templateDraft
+    ? templateDraftHtml()
+    : '<button class="btn" style="margin-bottom:14px" onclick="startNewTemplate()">+ New template</button>';
+  // Below: the saved templates list (or an empty hint).
+  const listHtml = state.templates.length === 0
+    ? '<div class="card"><p class="muted">No templates yet. Tap "+ New template" above, or build a session on Log and tap "Save as Template".</p></div>'
+    : state.templates.map((t, i) => `
+      <div class="card">
+        <div class="header-row" style="margin-bottom:8px">
+          <h3>${escapeHtml(t.name)} <span class="tag">${t.type}</span></h3>
+          <div class="btn-group">
+            <button class="btn-small" onclick="renameTemplate(${i})">Rename</button>
+            <button class="btn-danger" onclick="deleteTemplate(${i})">Delete</button>
+          </div>
         </div>
+        <pre>${escapeHtml((t.exercises || []).map(e => `• ${e.name} — ${(e.sets||[]).map(s=>s.type).join(', ')}`).join('\n'))}</pre>
       </div>
-      <pre>${escapeHtml((t.exercises || []).map(e => `• ${e.name} — ${(e.sets||[]).map(s=>s.type).join(', ')}`).join('\n'))}</pre>
-    </div>
-  `).join('');
+    `).join('');
+  c.innerHTML = topHtml + listHtml;
 }
 function renameTemplate(i) {
   const name = prompt('New name?', state.templates[i].name);
