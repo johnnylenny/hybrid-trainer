@@ -1,7 +1,13 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.17.0 — resilient cloud sync with a retry queue
+  HYBRID TRAINER v0.18.0 — custom in-app modals + toasts (no more native dialogs)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.17.0:
+    - Replaced all native confirm()/prompt()/alert() with brand-styled in-app
+      modals and toasts. confirm -> modalConfirm (promise), prompt -> modalPrompt,
+      alert -> showToast (success/error/info). The ~14 handlers that prompt the
+      user are now async/await. See the "CUSTOM MODALS + TOASTS" section.
 
   What's new vs v0.16.2:
     - Failed cloud writes are no longer dropped. Each per-record write goes
@@ -520,6 +526,22 @@
   .sync-indicator.error { color: var(--danger); border-color: var(--danger); background: rgba(220, 38, 38, 0.08); }
   .sync-indicator.pending { color: #d97706; border-color: #d97706; background: rgba(217, 119, 6, 0.10); }
   .sync-indicator.local { color: var(--text-muted); border-color: var(--border); background: var(--surface-2); }
+  /* Custom modals + toasts (replace native confirm/alert/prompt) */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+  .modal-box { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; max-width: 420px; width: 100%; padding: 20px; box-shadow: 0 12px 40px rgba(0,0,0,0.35); }
+  .modal-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 8px; }
+  .modal-message { font-size: 0.92rem; color: var(--text-dim); white-space: pre-line; margin-bottom: 16px; line-height: 1.5; }
+  .modal-input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 1rem; margin-bottom: 16px; box-sizing: border-box; }
+  .modal-buttons { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .modal-btn { padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border); font-size: 0.9rem; font-weight: 600; cursor: pointer; background: var(--surface-2); color: var(--text); }
+  .modal-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .modal-btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .toast-wrap { position: fixed; left: 0; right: 0; bottom: calc(80px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 1100; pointer-events: none; padding: 0 16px; }
+  .toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 0.88rem; max-width: 420px; white-space: pre-line; box-shadow: 0 6px 20px rgba(0,0,0,0.3); transition: opacity 0.25s, transform 0.25s; }
+  .toast.success { background: var(--success); color: #fff; }
+  .toast.error { background: var(--danger); color: #fff; }
+  .toast.info { background: var(--text); color: var(--bg); }
+  .toast-out { opacity: 0; transform: translateY(8px); }
   .signed-in-badge {
     display: inline-flex; align-items: center; gap: 6px;
     background: var(--surface-2);
@@ -597,7 +619,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.17.0</small>
+      <small>v0.18.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -872,7 +894,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.17.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.18.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1038,7 +1060,7 @@ async function onSignedIn() {
   } catch (e) {
     console.error('Failed to check cloud:', e);
     setSyncStatus('error');
-    alert('Could not reach your cloud account. Working in local mode for now. Sign out and try again later.');
+    showToast('Could not reach your cloud account. Working in local mode for now. Sign out and try again later.', 'error');
     appMode = 'local';
     updateSyncIndicator();
     renderLog();
@@ -1057,7 +1079,7 @@ async function onSignedIn() {
   if (!hasLocal && hasCloud) {
     // Pull cloud into local
     const r = await cloudPullAll();
-    if (!r.success) { alert('Failed to load your cloud data: ' + r.error); }
+    if (!r.success) { showToast('Failed to load your cloud data: ' + r.error, 'error'); }
     updateAuthBadge();
     renderLog();
     return;
@@ -1071,10 +1093,10 @@ async function onSignedIn() {
                 ' on this device that aren\'t in your account yet.\n\n' +
                 'Upload them to your account so they sync across devices?\n\n' +
                 'OK = upload\nCancel = keep local only (you will see an empty account until you upload)';
-    if (confirm(msg)) {
+    if (await modalConfirm(msg)) {
       const r = await cloudPushAll();
-      if (r.success) alert('Uploaded! Your data is now synced to your account.');
-      else alert('Upload failed: ' + r.error + '\nYour local data is safe, try again later.');
+      if (r.success) showToast('Uploaded! Your data is now synced to your account.', 'success');
+      else showToast('Upload failed: ' + r.error + '\nYour local data is safe, try again later.', 'error');
     }
     renderLog();
     return;
@@ -1104,7 +1126,7 @@ async function onSignedIn() {
     console.error('Reconcile (push local-only) failed, will still pull:', e);
   }
   const r = await cloudPullAll();
-  if (!r.success) alert('Failed to load your cloud data: ' + r.error);
+  if (!r.success) showToast('Failed to load your cloud data: ' + r.error, 'error');
   updateAuthBadge();
   renderLog();
 }
@@ -1217,20 +1239,20 @@ async function handleResendConfirmation() {
 }
 
 async function handleSignOut() {
-  if (!confirm('Sign out? Your local data stays on this device.')) return;
+  if (!await modalConfirm('Sign out? Your local data stays on this device.')) return;
   await sb.auth.signOut();
   // onAuthStateChange will show the sign-in overlay
 }
 
 async function handleDeleteAccount() {
   if (!currentUser) return;
-  const confirm1 = prompt(
+  const confirm1 = await modalPrompt(
     'This permanently deletes your account, all your cloud-synced sessions, templates, and settings.\n\n' +
     'Local data in this browser is NOT touched.\n\n' +
     'Type DELETE (all caps) to confirm:'
   );
-  if (confirm1 !== 'DELETE') { alert('Cancelled.'); return; }
-  if (!confirm('Last chance. Really delete your account?')) return;
+  if (confirm1 !== 'DELETE') { showToast('Cancelled.', 'info'); return; }
+  if (!await modalConfirm('Last chance. Really delete your account?')) return;
 
   try {
     // Delete user data from tables. RLS policies ensure we can only delete our own rows.
@@ -1245,7 +1267,7 @@ async function handleDeleteAccount() {
     if (e3) errors.push('settings: ' + e3.message);
 
     if (errors.length > 0) {
-      alert('Some data could not be deleted:\n' + errors.join('\n') + '\n\nThe account itself was not deleted. Try again or contact support.');
+      showToast('Some data could not be deleted:\n' + errors.join('\n') + '\n\nThe account itself was not deleted. Try again or contact support.', 'error');
       return;
     }
 
@@ -1255,9 +1277,9 @@ async function handleDeleteAccount() {
     // sign the user out after wiping their data; the auth record persists until manually
     // removed in the Supabase dashboard. (We will add the RPC in a later patch.)
     await sb.auth.signOut();
-    alert('Your data has been deleted and you have been signed out.\n\nNote: the auth login record itself can only be removed by the project admin. Tell Johnny if this is your account.');
+    showToast('Your data has been deleted and you have been signed out.\n\nNote: the auth login record itself can only be removed by the project admin. Tell Johnny if this is your account.', 'success');
   } catch (e) {
-    alert('Unexpected error: ' + e.message);
+    showToast('Unexpected error: ' + e.message, 'error');
   }
 }
 
@@ -1867,8 +1889,8 @@ function setToday() {
   state.currentSession.date = new Date().toISOString().slice(0, 10);
   saveState(); renderLog();
 }
-function cancelEdit() {
-  if (!confirm('Discard your edits and return to a new blank session?')) return;
+async function cancelEdit() {
+  if (!await modalConfirm('Discard your edits and return to a new blank session?')) return;
   state.editingHistoryIndex = null;
   state.currentSession = emptySession();
   saveState(); renderLog();
@@ -1923,7 +1945,7 @@ function toggleCrossDay(checked) {
 }
 // Guard function: warns before switching session type if there is data
 // that would be hidden by the switch. Called by the type dropdown.
-function onSessionTypeChangeRequest(selectEl) {
+async function onSessionTypeChangeRequest(selectEl) {
   const newType = selectEl.value;
   const oldType = state.currentSession.type;
   if (newType === oldType) return;
@@ -1944,7 +1966,7 @@ function onSessionTypeChangeRequest(selectEl) {
   }
 
   if (hasOldData) {
-    const proceed = confirm(
+    const proceed = await modalConfirm(
       `Switching to ${newType.toUpperCase()} will hide your ${oldDataDesc} (it stays in the data but won't display).\n\nClear it now instead?\n\n` +
       `OK = clear the old data\n` +
       `Cancel = keep the old data hidden`
@@ -2117,7 +2139,7 @@ function renderRunField(field, rd) {
     </div>`;
 }
 
-function changeRunType(newType) {
+async function changeRunType(newType) {
   if (!RUN_TYPES[newType]) return;
   // Warn if there's existing data that will be hidden (not deleted, just not displayed)
   const rd = state.currentSession.runData || {};
@@ -2127,7 +2149,7 @@ function changeRunType(newType) {
     const newFields = RUN_TYPES[newType].fields.map(f => f.key);
     const orphaned = oldFields.filter(k => !newFields.includes(k) && rd[k]);
     if (orphaned.length > 0) {
-      if (!confirm(`Some fields from "${RUN_TYPES[oldType].name}" don't exist in "${RUN_TYPES[newType].name}". The data won't be deleted, but it won't be shown. Continue?`)) {
+      if (!await modalConfirm(`Some fields from "${RUN_TYPES[oldType].name}" don't exist in "${RUN_TYPES[newType].name}". The data won't be deleted, but it won't be shown. Continue?`)) {
         document.getElementById('run-type-picker').value = oldType;
         return;
       }
@@ -2332,8 +2354,8 @@ function addExercise() {
   renderExercises();
   setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 50);
 }
-function removeExercise(i) {
-  if (!confirm('Remove this exercise?')) return;
+async function removeExercise(i) {
+  if (!await modalConfirm('Remove this exercise?')) return;
   state.currentSession.exercises.splice(i, 1);
   saveState(); renderExercises();
 }
@@ -2431,8 +2453,8 @@ function summarizeExerciseText(ex) {
   }).join(' · ');
 }
 
-function saveCurrentAsTemplate() {
-  const name = prompt('Template name?', state.currentSession.name || 'New Template');
+async function saveCurrentAsTemplate() {
+  const name = await modalPrompt('Template name?', state.currentSession.name || 'New Template');
   if (!name) return;
   const type = state.currentSession.type;
   let newTemplate;
@@ -2453,7 +2475,7 @@ function saveCurrentAsTemplate() {
   state.templates.push(newTemplate);
   saveState();
   cloudPushTemplate(newTemplate);
-  alert('Template saved.'); renderTemplates();
+  showToast('Template saved.', 'success'); renderTemplates();
 }
 // True if the current session has any content worth warning about before replace.
 function sessionHasContent() {
@@ -2463,12 +2485,12 @@ function sessionHasContent() {
   if (s.condData && Object.keys(s.condData).some(k => s.condData[k])) return true;
   return false;
 }
-function loadTemplateIntoSession() {
+async function loadTemplateIntoSession() {
   const idx = document.getElementById('template-picker').value;
   if (idx === '') return;
   const tpl = state.templates[parseInt(idx)];
   if (!tpl) return;
-  if (sessionHasContent() && !confirm('Replace the current session with this template?')) return;
+  if (sessionHasContent() && !await modalConfirm('Replace the current session with this template?')) return;
   state.currentSession.type = tpl.type;
   // Always adopt the selected template's name. (Old code kept the first
   // template's name when you switched to a different one.)
@@ -2564,7 +2586,7 @@ function templateDraftRemoveSet(i, j) {
 function saveTemplateDraft() {
   syncTemplateDraftFromDOM();
   const name = (templateDraft.name || '').trim();
-  if (!name) { alert('Give your template a name first.'); return; }
+  if (!name) { showToast('Give your template a name first.', 'error'); return; }
   const id = crypto.randomUUID();
   let newTemplate;
   if (templateDraft.type === 'run') {
@@ -2575,7 +2597,7 @@ function saveTemplateDraft() {
     } };
   } else if (templateDraft.type === 'conditioning') {
     const modality = (templateDraft.condData.modality || '').trim();
-    if (!modality) { alert('Add a modality (Row, Bike, etc.).'); return; }
+    if (!modality) { showToast('Add a modality (Row, Bike, etc.).', 'error'); return; }
     newTemplate = { id, name, type: 'conditioning', exercises: [], condData: {
       modality, total: (templateDraft.condData.total || '').trim()
     } };
@@ -2583,7 +2605,7 @@ function saveTemplateDraft() {
     const exercises = templateDraft.exercises
       .filter(ex => (ex.name || '').trim() !== '')
       .map(ex => ({ name: ex.name.trim(), sets: ex.sets.map(s => ({ type: s.type })), notes: '' }));
-    if (exercises.length === 0) { alert('Add at least one exercise with a name.'); return; }
+    if (exercises.length === 0) { showToast('Add at least one exercise with a name.', 'error'); return; }
     newTemplate = { id, name, type: 'lifts', exercises };
   }
   state.templates.push(newTemplate);
@@ -2719,7 +2741,7 @@ function addStarterToMyTemplates(id) {
   state.templates.push(copy);
   saveState();
   cloudPushTemplate(copy);
-  alert('Added "' + s.name + '" to your templates.');
+  showToast('Added "' + s.name + '" to your templates.', 'success');
   renderTemplates();
 }
 function starterSectionHtml() {
@@ -2768,16 +2790,16 @@ function renderTemplates() {
     `).join('');
   c.innerHTML = topHtml + starterHtml + yourHeader + listHtml;
 }
-function renameTemplate(i) {
-  const name = prompt('New name?', state.templates[i].name);
+async function renameTemplate(i) {
+  const name = await modalPrompt('New name?', state.templates[i].name);
   if (!name) return;
   state.templates[i].name = name;
   saveState();
   cloudPushTemplate(state.templates[i]);
   renderTemplates();
 }
-function deleteTemplate(i) {
-  if (!confirm('Delete this template?')) return;
+async function deleteTemplate(i) {
+  if (!await modalConfirm('Delete this template?')) return;
   const removed = state.templates[i];
   state.templates.splice(i, 1);
   saveState();
@@ -2785,12 +2807,12 @@ function deleteTemplate(i) {
   renderTemplates();
 }
 
-function saveSessionToHistory() {
+async function saveSessionToHistory() {
   const s = state.currentSession;
 
   // ---- BLOCKERS: nothing actually blocks, but these are first-line confirms ----
   if (s.type === 'lifts' && s.exercises.length === 0) {
-    if (!confirm('No exercises logged. Save anyway?')) return;
+    if (!await modalConfirm('No exercises logged. Save anyway?')) return;
   }
 
   // ---- Build a list of warnings, show them all at once ----
@@ -2854,7 +2876,7 @@ function saveSessionToHistory() {
 
   if (warnings.length > 0) {
     const message = "Heads up before saving:\n\n• " + warnings.join('\n• ') + "\n\nSave anyway?";
-    if (!confirm(message)) return;
+    if (!await modalConfirm(message)) return;
   }
 
   if (state.editingHistoryIndex !== null) {
@@ -2864,11 +2886,11 @@ function saveSessionToHistory() {
     }
     state.history[state.editingHistoryIndex] = JSON.parse(JSON.stringify(s));
     state.editingHistoryIndex = null;
-    alert('Session updated.');
+    showToast('Session updated.', 'success');
   } else {
     if (!s.id) s.id = crypto.randomUUID();
     state.history.unshift(JSON.parse(JSON.stringify(s)));
-    alert('Session saved.');
+    showToast('Session saved.', 'success');
   }
   const savedSession = state.history[state.editingHistoryIndex !== null ? state.editingHistoryIndex : 0]
     || state.history.find(h => h.id === s.id);
@@ -2878,19 +2900,19 @@ function saveSessionToHistory() {
   if (savedSession) cloudPushSession(savedSession);
   renderLog();
 }
-function clearSession() {
+async function clearSession() {
   if (state.editingHistoryIndex !== null) {
-    if (!confirm('You are editing a saved session. Clear the form without saving changes?')) return;
+    if (!await modalConfirm('You are editing a saved session. Clear the form without saving changes?')) return;
     state.editingHistoryIndex = null;
   } else {
-    if (!confirm('Clear current session without saving?')) return;
+    if (!await modalConfirm('Clear current session without saving?')) return;
   }
   state.currentSession = emptySession();
   saveState(); renderLog();
 }
-function editHistorySession(idx) {
+async function editHistorySession(idx) {
   if (state.currentSession.exercises.length > 0 || state.currentSession.notes) {
-    if (!confirm('You have an unsaved current session. Discard it and edit this one?')) return;
+    if (!await modalConfirm('You have an unsaved current session. Discard it and edit this one?')) return;
   }
   state.editingHistoryIndex = idx;
   state.currentSession = JSON.parse(JSON.stringify(state.history[idx]));
@@ -3013,8 +3035,8 @@ function summarizeSessionText(s) {
   if (s.notes) out += `\n\nsession notes: ${s.notes}`;
   return out;
 }
-function deleteHistory(i) {
-  if (!confirm('Delete this session permanently?')) return;
+async function deleteHistory(i) {
+  if (!await modalConfirm('Delete this session permanently?')) return;
   const removed = state.history[i];
   state.history.splice(i, 1);
   if (state.editingHistoryIndex === i) {
@@ -3438,15 +3460,15 @@ function updateSetting(key, value) {
   saveSettings();
   cloudPushSettings();
 }
-function nukeAllData() {
+async function nukeAllData() {
   const cloudNote = (appMode === 'cloud')
     ? '\n\nNote: this only wipes data on THIS device. Your cloud account is unaffected.\nIf you sign in again, your cloud data will redownload.'
     : '';
-  const confirm1 = prompt('This permanently deletes ALL data on this device.' + cloudNote + '\n\nType DELETE (all caps) to confirm:');
-  if (confirm1 !== 'DELETE') { alert('Cancelled.'); return; }
+  const confirm1 = await modalPrompt('This permanently deletes ALL data on this device.' + cloudNote + '\n\nType DELETE (all caps) to confirm:');
+  if (confirm1 !== 'DELETE') { showToast('Cancelled.', 'info'); return; }
   localStorage.removeItem(STORAGE_KEY);
   state = { templates: [], history: [], currentSession: emptySession(), editingHistoryIndex: null };
-  alert('All local data deleted.');
+  showToast('All local data deleted.', 'success');
   renderLog(); renderHistory(); renderTemplates();
 }
 
@@ -3467,7 +3489,7 @@ function exportData() {
   a.click();
   URL.revokeObjectURL(url);
 }
-function importData() {
+async function importData() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'application/json';
@@ -3475,7 +3497,7 @@ function importData() {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => {
+    reader.onload = async ev => {
       try {
         const imported = JSON.parse(ev.target.result);
         let toImport;
@@ -3485,7 +3507,7 @@ function importData() {
             history: imported.history || [],
             currentSession: imported.currentSession || emptySession()
           };
-          if (imported.settings && confirm('This file includes settings. Import settings too?')) {
+          if (imported.settings && await modalConfirm('This file includes settings. Import settings too?')) {
             Object.assign(settings, imported.settings);
             saveSettings();
           }
@@ -3496,10 +3518,10 @@ function importData() {
             currentSession: imported.currentSession || emptySession()
           };
         } else {
-          alert('Unrecognized file format.');
+          showToast('Unrecognized file format.', 'error');
           return;
         }
-        if (confirm('Replace ALL current data with the imported file?')) {
+        if (await modalConfirm('Replace ALL current data with the imported file?')) {
           state.templates = toImport.templates;
           state.history = toImport.history;
           state.currentSession = toImport.currentSession;
@@ -3509,9 +3531,9 @@ function importData() {
             state.currentSession.runData.runType = 'easy';
           }
           saveState(); renderLog();
-          alert('Import successful.');
+          showToast('Import successful.', 'success');
         }
-      } catch (err) { alert('Invalid JSON file: ' + err.message); }
+      } catch (err) { showToast('Invalid JSON file: ' + err.message, 'error'); }
     };
     reader.readAsText(file);
   };
@@ -3523,6 +3545,99 @@ function escapeHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 function escapeJs(str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+// =====================================================================
+// CUSTOM MODALS + TOASTS  (replace native confirm / alert / prompt)
+// showModal() returns a Promise; modalConfirm/modalAlert/modalPrompt wrap it.
+// showToast() is a non-blocking success/error notice.
+// =====================================================================
+let _modalCurrentSettle = null;
+function _ensureModalRoot() {
+  if (document.getElementById('app-modal-overlay')) return;
+  const o = document.createElement('div');
+  o.id = 'app-modal-overlay';
+  o.className = 'modal-overlay';
+  o.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true">' +
+    '<h3 id="modal-title" class="modal-title"></h3>' +
+    '<p id="modal-message" class="modal-message"></p>' +
+    '<input id="modal-input" class="modal-input" type="text" style="display:none">' +
+    '<div id="modal-buttons" class="modal-buttons"></div>' +
+    '</div>';
+  document.body.appendChild(o);
+  o.addEventListener('mousedown', (e) => { if (e.target === o && _modalCurrentSettle) _modalCurrentSettle(null); });
+}
+function showModal(opts) {
+  _ensureModalRoot();
+  const o = document.getElementById('app-modal-overlay');
+  document.getElementById('modal-title').textContent = opts.title || '';
+  const msgEl = document.getElementById('modal-message');
+  msgEl.textContent = opts.message || '';
+  msgEl.style.display = opts.message ? 'block' : 'none';
+  const inp = document.getElementById('modal-input');
+  if (opts.input) { inp.style.display = 'block'; inp.value = opts.defaultValue || ''; }
+  else { inp.style.display = 'none'; inp.value = ''; }
+  const btnWrap = document.getElementById('modal-buttons');
+  btnWrap.innerHTML = '';
+  return new Promise((resolve) => {
+    function keyHandler(e) {
+      if (e.key === 'Escape') { e.preventDefault(); settle(null); }
+      else if (e.key === 'Enter') {
+        const primary = buttons.find(b => b.variant === 'primary' || b.variant === 'danger') || buttons[buttons.length - 1];
+        if (primary) { e.preventDefault(); settle(primary.value); }
+      }
+    }
+    const settle = (value) => {
+      const text = inp.value;
+      o.style.display = 'none';
+      _modalCurrentSettle = null;
+      document.removeEventListener('keydown', keyHandler);
+      resolve({ value: value, text: text });
+    };
+    _modalCurrentSettle = settle;
+    const buttons = opts.buttons || [{ label: 'OK', value: true, variant: 'primary' }];
+    buttons.forEach((b) => {
+      const el = document.createElement('button');
+      el.className = 'modal-btn ' + (b.variant || 'secondary');
+      el.textContent = b.label;
+      el.onclick = () => settle(b.value);
+      btnWrap.appendChild(el);
+    });
+    document.addEventListener('keydown', keyHandler);
+    o.style.display = 'flex';
+    setTimeout(() => { if (opts.input) inp.focus(); }, 30);
+  });
+}
+function modalConfirm(message, o) {
+  o = o || {};
+  return showModal({ title: o.title || 'Confirm', message: message, buttons: [
+    { label: o.cancelText || 'Cancel', value: false, variant: 'secondary' },
+    { label: o.okText || 'OK', value: true, variant: o.danger ? 'danger' : 'primary' }
+  ] }).then(r => r.value === true);
+}
+function modalAlert(message, o) {
+  o = o || {};
+  return showModal({ title: o.title || 'Heads up', message: message, buttons: [
+    { label: o.okText || 'OK', value: true, variant: 'primary' }
+  ] }).then(() => undefined);
+}
+function modalPrompt(message, defaultValue, o) {
+  o = o || {};
+  return showModal({ title: o.title || 'Enter a value', message: message, input: true, defaultValue: defaultValue || '', buttons: [
+    { label: o.cancelText || 'Cancel', value: false, variant: 'secondary' },
+    { label: o.okText || 'OK', value: true, variant: 'primary' }
+  ] }).then(r => r.value === true ? (r.text || '') : null);
+}
+function showToast(message, type) {
+  let wrap = document.getElementById('app-toast-wrap');
+  if (!wrap) { wrap = document.createElement('div'); wrap.id = 'app-toast-wrap'; wrap.className = 'toast-wrap'; document.body.appendChild(wrap); }
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || 'info');
+  t.textContent = message;
+  wrap.appendChild(t);
+  const dur = (type === 'error') ? 5000 : 2800;
+  setTimeout(() => { t.classList.add('toast-out'); setTimeout(() => t.remove(), 250); }, dur);
+}
 
 loadState();
 applyTheme();
