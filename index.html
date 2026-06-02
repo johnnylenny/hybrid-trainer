@@ -1,7 +1,14 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.16.2 — Stats pace chart uses work-portion pace only
+  HYBRID TRAINER v0.17.0 — resilient cloud sync with a retry queue
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.16.2:
+    - Failed cloud writes are no longer dropped. Each per-record write goes
+      through a retry queue persisted to localStorage (survives reloads) and
+      retried automatically every 30s, when the network returns, and on tab
+      refocus. Deduped by entity+id (newest write wins). Header shows
+      "Retrying (n)" while the queue drains. See trySync / flushSyncQueue.
 
   What's new vs v0.16.1:
     - Stats pace chart now reflects the WORK portion of each run, never blended
@@ -511,6 +518,7 @@
   .sync-indicator.synced { color: var(--success); border-color: var(--success); background: rgba(6, 182, 212, 0.08); }
   .sync-indicator.syncing { color: var(--info); border-color: var(--info); background: rgba(139, 92, 246, 0.08); }
   .sync-indicator.error { color: var(--danger); border-color: var(--danger); background: rgba(220, 38, 38, 0.08); }
+  .sync-indicator.pending { color: #d97706; border-color: #d97706; background: rgba(217, 119, 6, 0.10); }
   .sync-indicator.local { color: var(--text-muted); border-color: var(--border); background: var(--surface-2); }
   .signed-in-badge {
     display: inline-flex; align-items: center; gap: 6px;
@@ -589,7 +597,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.16.2</small>
+      <small>v0.17.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -864,7 +872,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.16.2 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.17.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1442,10 +1450,13 @@ function emptyExercise(name = '') { return { name, sets: [], notes: '' }; }
 // =====================================================================
 let appMode = 'unauthenticated';
 const LOCAL_ONLY_KEY = 'hybridTrainerLocalOnly'; // remembers if user chose local-only
+const SYNC_QUEUE_KEY = 'hybridTrainerSyncQueue'; // failed cloud writes awaiting retry
 
 // Sync status: 'idle' | 'syncing' | 'error'
 let syncStatus = 'idle';
 let pendingSyncCount = 0;
+let syncQueue = [];      // ops that failed and are waiting to be retried
+let isFlushing = false;  // guard so only one queue-drain runs at a time
 
 function setSyncStatus(status) {
   syncStatus = status;
@@ -1466,9 +1477,12 @@ function updateSyncIndicator() {
   }
   if (appMode !== 'cloud') { el.style.display = 'none'; return; }
   el.style.display = 'inline-flex';
-  if (syncStatus === 'syncing' || pendingSyncCount > 0) {
+  if (syncStatus === 'syncing' || pendingSyncCount > 0 || isFlushing) {
     el.className = 'sync-indicator syncing';
     el.textContent = 'Syncing...';
+  } else if (syncQueue.length > 0) {
+    el.className = 'sync-indicator pending';
+    el.textContent = 'Retrying (' + syncQueue.length + ')';
   } else if (syncStatus === 'error') {
     el.className = 'sync-indicator error';
     el.textContent = 'Sync error';
@@ -1654,88 +1668,112 @@ async function cloudPushAll() {
   }
 }
 
+// --- Resilient single-record sync with a retry queue ------------------------
+// Every per-record write goes through trySync(). On failure the op is queued
+// (deduped by entity+id) and persisted to localStorage, then retried later by
+// flushSyncQueue() — on a timer, when the network returns, or on tab refocus.
+// A dropped write is therefore never silently lost; it survives even a reload.
+
+function loadSyncQueue() {
+  try {
+    const raw = localStorage.getItem(SYNC_QUEUE_KEY);
+    syncQueue = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(syncQueue)) syncQueue = [];
+  } catch (e) { syncQueue = []; }
+}
+function saveSyncQueue() {
+  try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(syncQueue)); } catch (e) {}
+}
+// One pending op per (entity, id): a newer write supersedes an older queued one.
+function enqueueSync(op) {
+  syncQueue = syncQueue.filter(o => !(o.entity === op.entity && o.id === op.id));
+  syncQueue.push(op);
+  saveSyncQueue();
+  updateSyncIndicator();
+}
+// Run one op (live or queued) against Supabase. Returns the Supabase {error}.
+// Settings reads the current global `settings` at send time (last-write-wins).
+function performSyncOp(op) {
+  if (op.kind === 'session')        return sb.from('sessions').upsert(sessionToRow(op.data, currentUser.id));
+  if (op.kind === 'deleteSession')  return sb.from('sessions').delete().eq('id', op.id);
+  if (op.kind === 'template')       return sb.from('templates').upsert(templateToRow(op.data, currentUser.id));
+  if (op.kind === 'deleteTemplate') return sb.from('templates').delete().eq('id', op.id);
+  if (op.kind === 'settings')       return sb.from('user_settings').upsert(settingsToRow(settings, currentUser.id));
+  return Promise.resolve({ error: null });
+}
+// Attempt a write immediately; queue it for retry if it fails.
+async function trySync(op) {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  pendingSyncCount++;
+  setSyncStatus('syncing');
+  try {
+    const { error } = await performSyncOp(op);
+    if (error) throw error;
+  } catch (e) {
+    console.error('sync failed, queued for retry:', op.kind, e.message || e);
+    enqueueSync(op);
+  } finally {
+    pendingSyncCount--;
+    if (pendingSyncCount === 0) {
+      if (syncQueue.length > 0) flushSyncQueue();        // clear any backlog
+      else if (syncStatus !== 'error') setSyncStatus('idle');
+      else updateSyncIndicator();
+    } else {
+      updateSyncIndicator();
+    }
+  }
+}
+// Drain the retry queue one op at a time. Stops on the first still-failing op
+// (likely still offline) and leaves the rest queued for the next attempt.
+async function flushSyncQueue() {
+  if (isFlushing) return;
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  if (syncQueue.length === 0) return;
+  isFlushing = true;
+  updateSyncIndicator();
+  try {
+    for (const op of syncQueue.slice()) {
+      try {
+        const { error } = await performSyncOp(op);
+        if (error) throw error;
+        syncQueue = syncQueue.filter(o => o !== op); // drop only the one that succeeded
+        saveSyncQueue();
+        updateSyncIndicator();
+      } catch (e) {
+        console.warn('retry still failing, will try again later:', op.kind, e.message || e);
+        break;
+      }
+    }
+  } finally {
+    isFlushing = false;
+    if (syncQueue.length === 0 && pendingSyncCount === 0) setSyncStatus('idle');
+    else updateSyncIndicator();
+  }
+}
+const _cloneForSync = (x) => JSON.parse(JSON.stringify(x));
+
 // Push a single session (insert or update). Used on every save.
-async function cloudPushSession(session) {
+function cloudPushSession(session) {
   if (appMode !== 'cloud' || !sb || !currentUser) return;
-  pendingSyncCount++;
-  setSyncStatus('syncing');
-  try {
-    if (!session.id) session.id = crypto.randomUUID();
-    const { error } = await sb.from('sessions').upsert(sessionToRow(session, currentUser.id));
-    if (error) throw error;
-  } catch (e) {
-    console.error('cloudPushSession failed:', e);
-    setSyncStatus('error');
-  } finally {
-    pendingSyncCount--;
-    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
-    else updateSyncIndicator();
-  }
+  if (!session.id) session.id = crypto.randomUUID();
+  return trySync({ kind: 'session', entity: 'session', id: session.id, data: _cloneForSync(session) });
 }
-async function cloudDeleteSession(sessionId) {
+function cloudDeleteSession(sessionId) {
   if (appMode !== 'cloud' || !sb || !currentUser || !sessionId) return;
-  pendingSyncCount++;
-  setSyncStatus('syncing');
-  try {
-    const { error } = await sb.from('sessions').delete().eq('id', sessionId);
-    if (error) throw error;
-  } catch (e) {
-    console.error('cloudDeleteSession failed:', e);
-    setSyncStatus('error');
-  } finally {
-    pendingSyncCount--;
-    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
-    else updateSyncIndicator();
-  }
+  return trySync({ kind: 'deleteSession', entity: 'session', id: sessionId });
 }
-async function cloudPushTemplate(template) {
+function cloudPushTemplate(template) {
   if (appMode !== 'cloud' || !sb || !currentUser) return;
-  pendingSyncCount++;
-  setSyncStatus('syncing');
-  try {
-    if (!template.id) template.id = crypto.randomUUID();
-    const { error } = await sb.from('templates').upsert(templateToRow(template, currentUser.id));
-    if (error) throw error;
-  } catch (e) {
-    console.error('cloudPushTemplate failed:', e);
-    setSyncStatus('error');
-  } finally {
-    pendingSyncCount--;
-    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
-    else updateSyncIndicator();
-  }
+  if (!template.id) template.id = crypto.randomUUID();
+  return trySync({ kind: 'template', entity: 'template', id: template.id, data: _cloneForSync(template) });
 }
-async function cloudDeleteTemplate(templateId) {
+function cloudDeleteTemplate(templateId) {
   if (appMode !== 'cloud' || !sb || !currentUser || !templateId) return;
-  pendingSyncCount++;
-  setSyncStatus('syncing');
-  try {
-    const { error } = await sb.from('templates').delete().eq('id', templateId);
-    if (error) throw error;
-  } catch (e) {
-    console.error('cloudDeleteTemplate failed:', e);
-    setSyncStatus('error');
-  } finally {
-    pendingSyncCount--;
-    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
-    else updateSyncIndicator();
-  }
+  return trySync({ kind: 'deleteTemplate', entity: 'template', id: templateId });
 }
-async function cloudPushSettings() {
+function cloudPushSettings() {
   if (appMode !== 'cloud' || !sb || !currentUser) return;
-  pendingSyncCount++;
-  setSyncStatus('syncing');
-  try {
-    const { error } = await sb.from('user_settings').upsert(settingsToRow(settings, currentUser.id));
-    if (error) throw error;
-  } catch (e) {
-    console.error('cloudPushSettings failed:', e);
-    setSyncStatus('error');
-  } finally {
-    pendingSyncCount--;
-    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
-    else updateSyncIndicator();
-  }
+  return trySync({ kind: 'settings', entity: 'settings', id: 'settings' });
 }
 
 function loadState() {
@@ -3489,6 +3527,14 @@ function escapeJs(str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"
 loadState();
 applyTheme();
 renderLog();
+loadSyncQueue();
+
+// Retry any queued cloud writes: every 30s, when the network returns, and when
+// the tab regains focus. Each is a no-op unless we're in cloud mode with a
+// non-empty queue, so they're safe to wire up unconditionally.
+setInterval(() => flushSyncQueue(), 30000);
+window.addEventListener('online', () => flushSyncQueue());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) flushSyncQueue(); });
 
 // Boot Supabase auth last so the app is rendered behind the sign-in overlay
 if (initSupabase()) {
