@@ -1,17 +1,14 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.12.1 — palette refresh
+  HYBRID TRAINER v0.12.2 — declutter header
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.12:
-    - New brand palette: olive accent (#65a30d), cyan success (#06b6d4),
-      violet info (#8b5cf6). Danger red unchanged.
-    - Dark-mode variants: brighter shifts of the same hues (#84cc16 olive,
-      #22d3ee cyan, #a78bfa violet) so they pop against dark surfaces.
-    - manifest.json theme_color updated to olive.
-    - BRAND.md added to repo with full palette, voice, and naming guidelines.
+  What's new vs v0.12.1:
+    - Removed the Export/Import buttons from the page header. They already
+      live in Settings ("Export all data" / "Import from file"), so this
+      just drops the duplicate and cleans up the top bar.
 
-  Schema unchanged. No code logic changed. Just colors.
+  Schema unchanged. No data logic changed.
 -->
 <html lang="en">
 <head>
@@ -88,7 +85,6 @@
   header.top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; gap: 8px; }
   header.top h1 { line-height: 1.1; }
   header.top small { display: block; margin-top: 2px; }
-  .header-actions { display: flex; gap: 6px; }
   .edit-banner {
     background: var(--info); color: white; padding: 8px 12px;
     border-radius: var(--radius); margin-bottom: 12px;
@@ -514,7 +510,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.12.1</small>
+      <small>v0.12.2</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -525,10 +521,6 @@
     <div id="local-mode-actions" style="display:none; margin-top:6px;">
       <button class="btn-small" onclick="goToSignIn()">Sign in to sync</button>
     </div>
-  </div>
-  <div class="header-actions">
-    <button class="btn-small" onclick="exportData()">Export</button>
-    <button class="btn-small" onclick="importData()">Import</button>
   </div>
 </header>
 
@@ -793,7 +785,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.12.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.12.2 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
