@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.21.0 — Hyrox / WOD presets + circuit templates
+  HYBRID TRAINER v0.22.0 — build any conditioning type as a template
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new vs v0.18.1:
@@ -632,7 +632,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.21.0</small>
+      <small>v0.22.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -912,7 +912,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.21.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.22.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -2704,13 +2704,19 @@ async function saveCurrentAsTemplate() {
       runData: { runType: rd.runType || 'easy', distance: rd.distance || '', pace: rd.pace || '' } };
   } else if (type === 'conditioning') {
     const cd = state.currentSession.condData || {};
-    if (cd.condType === 'circuit') {
-      // Keep the circuit skeleton (format + segment labels/targets); drop the
-      // result values so the template is a blank-to-fill workout.
-      newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
-        condData: { condType: 'circuit', format: cd.format || '',
-          segments: (cd.segments || []).map(s => ({ label: s.label || '', target: s.target || '', result: '' })) } };
+    const condType = cd.condType;
+    if (condType && COND_TYPES[condType]) {
+      // Keep the type + the values you entered; drop per-segment results so a
+      // circuit template is a blank-to-fill skeleton.
+      const typeDef = COND_TYPES[condType];
+      const out = { condType };
+      typeDef.fields.forEach(f => { if (cd[f.key]) out[f.key] = cd[f.key]; });
+      if (typeDef.hasSegments && Array.isArray(cd.segments)) {
+        out.segments = cd.segments.map(s => ({ label: s.label || '', target: s.target || '', result: '' }));
+      }
+      newTemplate = { id: crypto.randomUUID(), name, type, exercises: [], condData: out };
     } else {
+      // Legacy session with no condType.
       newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
         condData: { modality: cd.modality || '', total: cd.total || '' } };
     }
@@ -2778,7 +2784,7 @@ function emptyTemplateDraft() {
     name: '', type: 'lifts',
     exercises: [{ name: '', sets: [] }],
     runData: { runType: 'easy', distance: '', pace: '' },
-    condData: { modality: '', total: '' }
+    condData: { condType: 'circuit' }
   };
 }
 function startNewTemplate() {
@@ -2803,8 +2809,48 @@ function syncTemplateDraftFromDOM() {
   const rt = document.getElementById('tpl-draft-runtype'); if (rt) templateDraft.runData.runType = rt.value;
   const di = document.getElementById('tpl-draft-distance'); if (di) templateDraft.runData.distance = di.value;
   const pa = document.getElementById('tpl-draft-pace'); if (pa) templateDraft.runData.pace = pa.value;
-  const mo = document.getElementById('tpl-draft-modality'); if (mo) templateDraft.condData.modality = mo.value;
-  const to = document.getElementById('tpl-draft-total'); if (to) templateDraft.condData.total = to.value;
+  // Conditioning is config-driven: read the chosen type's fields (and circuit
+  // segments) by their generated ids, so every COND_TYPES type is supported.
+  const ctEl = document.getElementById('tpl-draft-condtype');
+  if (ctEl) {
+    if (!templateDraft.condData) templateDraft.condData = {};
+    templateDraft.condData.condType = ctEl.value;
+    const typeDef = COND_TYPES[ctEl.value] || COND_TYPES.other;
+    typeDef.fields.forEach(f => {
+      const el = document.getElementById('tpl-draft-cf-' + f.key);
+      if (el) templateDraft.condData[f.key] = el.value;
+    });
+    if (typeDef.hasSegments && Array.isArray(templateDraft.condData.segments)) {
+      templateDraft.condData.segments.forEach((seg, i) => {
+        const lab = document.getElementById('tpl-draft-seg-' + i + '-label');
+        const tar = document.getElementById('tpl-draft-seg-' + i + '-target');
+        if (lab) seg.label = lab.value;
+        if (tar) seg.target = tar.value;
+      });
+    }
+  }
+}
+// Switch the conditioning sub-type in the builder. Seed one empty segment when
+// moving to a segment-based type so there's a row to fill.
+function templateDraftSetCondType(newType) {
+  syncTemplateDraftFromDOM();
+  if (!templateDraft.condData) templateDraft.condData = {};
+  templateDraft.condData.condType = newType;
+  if ((COND_TYPES[newType] || {}).hasSegments && !Array.isArray(templateDraft.condData.segments)) {
+    templateDraft.condData.segments = [{ label: '', target: '' }];
+  }
+  renderTemplates();
+}
+function templateDraftAddSegment() {
+  syncTemplateDraftFromDOM();
+  if (!Array.isArray(templateDraft.condData.segments)) templateDraft.condData.segments = [];
+  templateDraft.condData.segments.push({ label: '', target: '' });
+  renderTemplates();
+}
+function templateDraftRemoveSegment(i) {
+  syncTemplateDraftFromDOM();
+  if (Array.isArray(templateDraft.condData.segments)) templateDraft.condData.segments.splice(i, 1);
+  renderTemplates();
 }
 function templateDraftSetType(type) {
   syncTemplateDraftFromDOM();
@@ -2846,11 +2892,24 @@ function saveTemplateDraft() {
       pace: (templateDraft.runData.pace || '').trim()
     } };
   } else if (templateDraft.type === 'conditioning') {
-    const modality = (templateDraft.condData.modality || '').trim();
-    if (!modality) { showToast('Add a modality (Row, Bike, etc.).', 'error'); return; }
-    newTemplate = { id, name, type: 'conditioning', exercises: [], condData: {
-      modality, total: (templateDraft.condData.total || '').trim()
-    } };
+    const cd = templateDraft.condData || {};
+    const condType = cd.condType || 'other';
+    const typeDef = COND_TYPES[condType] || COND_TYPES.other;
+    const out = { condType };
+    // Keep only the fields the user actually filled (templates are skeletons).
+    typeDef.fields.forEach(f => {
+      const v = (cd[f.key] || '').trim();
+      if (v) out[f.key] = v;
+    });
+    if (typeDef.hasSegments) {
+      const segs = (cd.segments || [])
+        .map(s => ({ label: (s.label || '').trim(), target: (s.target || '').trim(), result: '' }))
+        .filter(s => s.label || s.target);
+      if (segs.length) out.segments = segs;
+    }
+    const hasData = Object.keys(out).some(k => k !== 'condType' && (k === 'segments' ? out[k].length : out[k]));
+    if (!hasData) { showToast('Add at least one target field or segment.', 'error'); return; }
+    newTemplate = { id, name, type: 'conditioning', exercises: [], condData: out };
   } else {
     const exercises = templateDraft.exercises
       .filter(ex => (ex.name || '').trim() !== '')
@@ -2884,6 +2943,15 @@ function templateSummaryText(t) {
       segs.forEach(seg => lines.push('• ' + (seg.label || '(segment)') + (seg.target ? ' (' + seg.target + ')' : '')));
       return lines.join('\n');
     }
+    if (cd.condType && COND_TYPES[cd.condType]) {
+      const typeDef = COND_TYPES[cd.condType];
+      const bits = [typeDef.name];
+      typeDef.fields
+        .filter(f => f.key !== 'notes' && cd[f.key])
+        .forEach(f => bits.push(`${f.label}: ${cd[f.key]}`));
+      return bits.join(' · ');
+    }
+    // Legacy conditioning templates (no condType): modality + target work.
     const bits = [];
     if (cd.modality) bits.push(cd.modality);
     if (cd.total) bits.push('target ' + cd.total);
@@ -2907,12 +2975,17 @@ function templateDraftBodyHtml() {
   }
   if (type === 'conditioning') {
     const cd = templateDraft.condData || {};
+    const condType = cd.condType || 'circuit';
+    const typeDef = COND_TYPES[condType] || COND_TYPES.circuit;
+    const opts = Object.keys(COND_TYPES).map(k =>
+      `<option value="${k}" ${condType === k ? 'selected' : ''}>${escapeHtml(COND_TYPES[k].name)}</option>`).join('');
+    const segHtml = typeDef.hasSegments ? templateDraftSegmentsHtml(cd) : '';
+    const fieldsHtml = typeDef.fields.map(f => templateDraftCondFieldHtml(f, cd)).join('');
     return `
-      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">Pre-set the modality and optional target work.</p>
-      <div class="row">
-        <div class="field"><label>Modality</label><input type="text" id="tpl-draft-modality" placeholder="Row, Bike, AirDyne" value="${escapeHtml(cd.modality || '')}"></div>
-        <div class="field"><label>Target work</label><input type="text" id="tpl-draft-total" placeholder="5x500m" value="${escapeHtml(cd.total || '')}"></div>
-      </div>`;
+      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">Pick the conditioning type, then pre-set any target values. You fill the rest each session.</p>
+      <div class="field"><label>Conditioning type</label><select id="tpl-draft-condtype" onchange="templateDraftSetCondType(this.value)">${opts}</select></div>
+      ${segHtml}
+      ${fieldsHtml}`;
   }
   // lifts
   const exRows = templateDraft.exercises.map((ex, i) => {
@@ -2938,6 +3011,41 @@ function templateDraftBodyHtml() {
     <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">A reusable list of lift exercises and their set types.</p>
     ${exRows}
     <button class="btn-secondary" style="width:100%; margin-bottom:10px" onclick="templateDraftAddExercise()">+ Add exercise</button>`;
+}
+// One conditioning field input for the template builder, by field type.
+// Templates store target values, so ids are namespaced tpl-draft-cf-<key>.
+function templateDraftCondFieldHtml(field, cd) {
+  const value = escapeHtml(cd[field.key] || '');
+  const label = escapeHtml(field.label);
+  const placeholder = escapeHtml(field.placeholder || '');
+  const id = 'tpl-draft-cf-' + field.key;
+  if (field.type === 'textarea') {
+    return `<div class="field"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}">${value}</textarea></div>`;
+  }
+  if (field.type === 'number') {
+    return `<div class="field"><label>${label}</label><input type="number" inputmode="numeric" id="${id}" placeholder="${placeholder}" value="${value}"></div>`;
+  }
+  return `<div class="field"><label>${label}</label><input type="text" id="${id}" placeholder="${placeholder}" value="${value}"></div>`;
+}
+// Segment editor for circuit (Hyrox/WOD) templates: label + target rows only
+// (result is filled per session). Stored in templateDraft.condData.segments.
+function templateDraftSegmentsHtml(cd) {
+  const segs = Array.isArray(cd.segments) ? cd.segments : [];
+  const rows = segs.map((seg, i) => `
+    <div class="card compact" style="margin-bottom:8px">
+      <div class="header-row" style="margin-bottom:6px">
+        <strong>${i + 1}</strong>
+        <button class="btn-small" onclick="templateDraftRemoveSegment(${i})" title="Remove segment">&times;</button>
+      </div>
+      <div class="field"><label>Station / movement</label><input type="text" id="tpl-draft-seg-${i}-label" value="${escapeHtml(seg.label || '')}" placeholder="Run 1km, SkiErg, Thrusters"></div>
+      <div class="field"><label>Target</label><input type="text" id="tpl-draft-seg-${i}-target" value="${escapeHtml(seg.target || '')}" placeholder="1000m, 21 reps"></div>
+    </div>`).join('');
+  return `
+    <div style="margin-bottom:14px">
+      <label style="display:block; margin-bottom:8px">Segments</label>
+      ${rows || '<div class="muted" style="font-size:0.85rem; margin-bottom:8px">No segments yet. Add one below.</div>'}
+      <button class="btn-secondary" style="width:100%" onclick="templateDraftAddSegment()">+ Add segment</button>
+    </div>`;
 }
 function templateDraftHtml() {
   const type = templateDraft.type;
