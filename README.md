@@ -30,7 +30,8 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Switching types preserves data, doesn't delete fields
 
 **Conditioning**
-- Type-based like runs: Erg (Row/Bike/Ski), Sled/Carry, Ruck, Circuit/MetCon, and Other/General, each with its own fields
+- Type-based like runs: Erg (Row/Bike/Ski), Sled/Carry, Ruck, Circuit/MetCon, Hyrox/WOD, and Other/General, each with its own fields
+- Hyrox/WOD uses a repeatable segment list (movement + target + result) for races and CrossFit benchmarks
 - Switching type preserves data, doesn't delete fields
 
 **Stats**
@@ -49,7 +50,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Stored in the cloud, syncs across devices
 
 **Everywhere**
-- Reusable templates for all three session types: lifts (exercise lists), run (run type + target distance/pace), and conditioning (modality + target work). Build them in the Templates tab, or save the current session as one.
+- Reusable templates for all three session types: lifts (exercise lists), run (run type + target distance/pace), and conditioning (any type's target fields, including a segment editor for Hyrox/WOD). Build them in the Templates tab, or save the current session as one. Built-in presets (Hyrox, Fran, Murph, Cindy) are one tap to add.
 - Browse a starter-template library and add presets to your own templates with one tap
 - Edit any saved session (tap it in History)
 - Sort and filter history by type, phase, name, and date range
@@ -62,7 +63,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 ## Status
 
-v0.19 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates + a starter library, detailed tempo/interval/race run logging, type-based conditioning, and custom in-app modals. Works on phone and laptop, signed in or local-only.
+v0.22 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates + a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, and custom in-app modals. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -92,15 +93,14 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 
 ## Roadmap
 
-**Near-term:**
-- Conflict resolution for simultaneous edits on two devices
-- Conditioning templates for the new per-type fields
+**Next up:**
+- Import workouts from Garmin / Strava / Apple Health, so you stop hand-entering pace/distance/HR (starting with activity-file import, then Strava)
 
 **The reason this exists:**
 - Combined lifting + cardio fatigue score (the differentiator no other app does for hybrid athletes)
 
 **Long-term:**
-- Pull workouts from Garmin / Strava / Apple Health (needs a small backend for OAuth)
+- Conflict resolution for simultaneous edits on two devices
 - Strava export for completed sessions
 - Sharing with friends (read-only access to selected sessions)
 - Hub-style dashboard aggregating training load across modalities
