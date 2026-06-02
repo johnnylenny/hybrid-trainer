@@ -1,24 +1,17 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.11 — user profile (name + avatar)
+  HYBRID TRAINER v0.12.1 — palette refresh
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.10:
-    - Display name field in Settings (cloud-only). Shown in header instead
-      of email when set, falls back to email.
-    - Avatar picker: 5 emoji presets (lifter, runner, strong, fire, bolt).
-      Stored as a short key, rendered as the emoji.
-    - Profile card in Settings only shows when signed in (local-only users
-      have no need for it).
-    - Adds display_name + avatar columns to user_settings table (one-time SQL
-      migration the user runs in Supabase).
+  What's new vs v0.12:
+    - New brand palette: olive accent (#65a30d), cyan success (#06b6d4),
+      violet info (#8b5cf6). Danger red unchanged.
+    - Dark-mode variants: brighter shifts of the same hues (#84cc16 olive,
+      #22d3ee cyan, #a78bfa violet) so they pop against dark surfaces.
+    - manifest.json theme_color updated to olive.
+    - BRAND.md added to repo with full palette, voice, and naming guidelines.
 
-  Requires SQL migration:
-    alter table public.user_settings
-      add column if not exists display_name text,
-      add column if not exists avatar text;
-
-  Schema bumped to v9 (additive only; old exports import fine).
+  Schema unchanged. No code logic changed. Just colors.
 -->
 <html lang="en">
 <head>
@@ -27,6 +20,16 @@
 <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Hybrid Trainer</title>
+
+<!-- PWA manifest (Android, Chrome, modern browsers) -->
+<link rel="manifest" href="manifest.json">
+
+<!-- iOS-specific PWA tags (Apple predates the standard and ignores most of manifest.json) -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hybrid">
+<link rel="apple-touch-icon" href="icon-180.png">
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -34,9 +37,9 @@
     --bg: #fafafa; --surface: #ffffff; --surface-2: #f4f4f5; --surface-3: #e8e8eb;
     --border: #e4e4e7; --border-strong: #d4d4d8;
     --text: #18181b; --text-muted: #71717a; --text-dim: #a1a1aa;
-    --accent: #f59e0b; --accent-hover: #d97706; --accent-text: #18181b;
-    --success: #16a34a; --info: #2563eb; --danger: #dc2626;
-    --warmup-bg: #f4f4f5; --myorep-bg: rgba(245, 158, 11, 0.08); --drop-bg: rgba(37, 99, 235, 0.08);
+    --accent: #65a30d; --accent-hover: #4d7c0f; --accent-text: #ffffff;
+    --success: #06b6d4; --info: #8b5cf6; --danger: #dc2626;
+    --warmup-bg: #f4f4f5; --myorep-bg: rgba(101, 163, 13, 0.08); --drop-bg: rgba(139, 92, 246, 0.08);
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
     --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
     --shadow-lg: 0 4px 6px rgba(0,0,0,0.05), 0 10px 15px rgba(0,0,0,0.08);
@@ -47,9 +50,9 @@
       --bg: #0a0a0b; --surface: #131316; --surface-2: #1c1c20; --surface-3: #27272a;
       --border: #27272a; --border-strong: #3f3f46;
       --text: #fafafa; --text-muted: #a1a1aa; --text-dim: #71717a;
-      --accent: #fbbf24; --accent-hover: #f59e0b; --accent-text: #0a0a0b;
-      --success: #4ade80; --info: #60a5fa; --danger: #f87171;
-      --warmup-bg: #1c1c20; --myorep-bg: rgba(251, 191, 36, 0.10); --drop-bg: rgba(96, 165, 250, 0.10);
+      --accent: #84cc16; --accent-hover: #a3e635; --accent-text: #0a0a0b;
+      --success: #22d3ee; --info: #a78bfa; --danger: #f87171;
+      --warmup-bg: #1c1c20; --myorep-bg: rgba(132, 204, 22, 0.10); --drop-bg: rgba(167, 139, 250, 0.10);
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow: 0 1px 3px rgba(0,0,0,0.4); --shadow-lg: 0 10px 20px rgba(0,0,0,0.5);
     }
   }
@@ -57,9 +60,9 @@
     --bg: #0a0a0b; --surface: #131316; --surface-2: #1c1c20; --surface-3: #27272a;
     --border: #27272a; --border-strong: #3f3f46;
     --text: #fafafa; --text-muted: #a1a1aa; --text-dim: #71717a;
-    --accent: #fbbf24; --accent-hover: #f59e0b; --accent-text: #0a0a0b;
-    --success: #4ade80; --info: #60a5fa; --danger: #f87171;
-    --warmup-bg: #1c1c20; --myorep-bg: rgba(251, 191, 36, 0.10); --drop-bg: rgba(96, 165, 250, 0.10);
+    --accent: #84cc16; --accent-hover: #a3e635; --accent-text: #0a0a0b;
+    --success: #22d3ee; --info: #a78bfa; --danger: #f87171;
+    --warmup-bg: #1c1c20; --myorep-bg: rgba(132, 204, 22, 0.10); --drop-bg: rgba(167, 139, 250, 0.10);
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow: 0 1px 3px rgba(0,0,0,0.4); --shadow-lg: 0 10px 20px rgba(0,0,0,0.5);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -126,7 +129,7 @@
   }
   input:focus, select:focus, textarea:focus {
     outline: none; border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+    box-shadow: 0 0 0 3px rgba(101, 163, 13, 0.15);
   }
   input.invalid, textarea.invalid {
     border-color: var(--danger);
@@ -378,9 +381,9 @@
   }
   .signin-divider { text-align: center; color: var(--text-dim); font-size: 0.75rem; margin: 14px 0; text-transform: uppercase; letter-spacing: 0.1em; }
   .signin-msg { padding: 10px; border-radius: var(--radius-sm); font-size: 0.85rem; margin-top: 12px; }
-  .signin-msg.success { background: rgba(22, 163, 74, 0.1); color: var(--success); border: 1px solid var(--success); }
+  .signin-msg.success { background: rgba(6, 182, 212, 0.1); color: var(--success); border: 1px solid var(--success); }
   .signin-msg.error { background: rgba(220, 38, 38, 0.1); color: var(--danger); border: 1px solid var(--danger); }
-  .signin-msg.info { background: rgba(37, 99, 235, 0.1); color: var(--info); border: 1px solid var(--info); }
+  .signin-msg.info { background: rgba(139, 92, 246, 0.1); color: var(--info); border: 1px solid var(--info); }
   .signin-extra { text-align: center; margin-top: 12px; font-size: 0.82rem; }
   .signin-extra a { color: var(--accent); cursor: pointer; text-decoration: underline; }
   .signin-skip {
@@ -430,8 +433,8 @@
     margin-left: 6px;
     border: 1px solid;
   }
-  .sync-indicator.synced { color: var(--success); border-color: var(--success); background: rgba(22, 163, 74, 0.08); }
-  .sync-indicator.syncing { color: var(--info); border-color: var(--info); background: rgba(37, 99, 235, 0.08); }
+  .sync-indicator.synced { color: var(--success); border-color: var(--success); background: rgba(6, 182, 212, 0.08); }
+  .sync-indicator.syncing { color: var(--info); border-color: var(--info); background: rgba(139, 92, 246, 0.08); }
   .sync-indicator.error { color: var(--danger); border-color: var(--danger); background: rgba(220, 38, 38, 0.08); }
   .sync-indicator.local { color: var(--text-muted); border-color: var(--border); background: var(--surface-2); }
   .signed-in-badge {
@@ -511,7 +514,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.11</small>
+      <small>v0.12.1</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -790,7 +793,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.11 · cloud sync + profile web app · data lives in this browser's localStorage</small>
+    <small>v0.12.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -2536,9 +2539,9 @@ function prepareCanvas(canvasId) {
 function chartColors() {
   const cs = getComputedStyle(document.documentElement);
   return {
-    accent: cs.getPropertyValue('--accent').trim() || '#f59e0b',
-    info: cs.getPropertyValue('--info').trim() || '#2563eb',
-    success: cs.getPropertyValue('--success').trim() || '#16a34a',
+    accent: cs.getPropertyValue('--accent').trim() || '#65a30d',
+    info: cs.getPropertyValue('--info').trim() || '#8b5cf6',
+    success: cs.getPropertyValue('--success').trim() || '#06b6d4',
     text: cs.getPropertyValue('--text-muted').trim() || '#71717a',
     grid: cs.getPropertyValue('--border').trim() || '#e4e4e7'
   };
