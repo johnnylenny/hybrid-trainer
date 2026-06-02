@@ -1,20 +1,28 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.9.1 — auth UX polish
+  HYBRID TRAINER v0.10 — cloud sync
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.9:
-    - Tabbed Sign in / Create account UI (much clearer mode switching)
-    - Better handling for email confirmation: clear message when needed,
-      "Resend confirmation email" option if the user gets stuck
-    - Special-case message for the "Email not confirmed" error
-    - Delete Account button in Settings → Danger zone (visible when signed in).
-      Wipes user's rows from sessions/templates/user_settings via RLS.
-      Auth user record itself stays until manually removed in Supabase dashboard
-      (deleting that requires a server-side RPC which we'll add later).
+  What's new vs v0.9.1:
+    - Three app modes: 'cloud' (signed in, syncing), 'local' (chose to skip
+      sign-in), 'unauthenticated' (showing sign-in card)
+    - "Continue without an account" option on sign-in card → stays in local mode
+    - Sync indicator in header: Synced / Syncing / Sync error / Local only
+    - On sign-in, four scenarios are handled:
+        * cloud empty + local empty → nothing
+        * cloud empty + local data → prompt to upload
+        * cloud data + local empty → pull
+        * cloud data + local data → prompt to choose
+    - Every session/template/settings change pushes to cloud in background
+    - On sign-out, local cache is wiped (so the next signed-in user can't see it)
+    - "Delete all local data" warns it's only local (cloud account untouched)
+    - sessionToRow / rowToSession etc. convert between local JS and DB shapes
 
-  Still: data lives in localStorage. Sync logic comes in v0.10.
-  Schema unchanged. Same Supabase project + RLS policies as v0.9.
+  Schema:
+    - Supabase tables: sessions, templates, user_settings (created in v0.9 setup)
+    - Local: localStorage as cache (same key as before)
+    - All sessions/templates now carry a uuid `id` so cloud upserts work
+  Auth: Supabase Email provider with magic link fallback (same as v0.9).
 -->
 <html lang="en">
 <head>
@@ -379,6 +387,35 @@
   .signin-msg.info { background: rgba(37, 99, 235, 0.1); color: var(--info); border: 1px solid var(--info); }
   .signin-extra { text-align: center; margin-top: 12px; font-size: 0.82rem; }
   .signin-extra a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .signin-skip {
+    text-align: center;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .signin-skip a {
+    color: var(--text-muted);
+    cursor: pointer;
+    text-decoration: underline;
+    font-size: 0.85rem;
+  }
+  .signin-skip-note { color: var(--text-dim); font-size: 0.72rem; margin-top: 4px; }
+
+  /* Sync indicator in header */
+  .sync-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    margin-left: 6px;
+    border: 1px solid;
+  }
+  .sync-indicator.synced { color: var(--success); border-color: var(--success); background: rgba(22, 163, 74, 0.08); }
+  .sync-indicator.syncing { color: var(--info); border-color: var(--info); background: rgba(37, 99, 235, 0.08); }
+  .sync-indicator.error { color: var(--danger); border-color: var(--danger); background: rgba(220, 38, 38, 0.08); }
+  .sync-indicator.local { color: var(--text-muted); border-color: var(--border); background: var(--surface-2); }
   .signed-in-badge {
     display: inline-flex; align-items: center; gap: 6px;
     background: var(--surface-2);
@@ -444,16 +481,27 @@
     <div class="signin-extra" id="signin-extra" style="display:none">
       <a onclick="handleResendConfirmation()">Resend confirmation email</a>
     </div>
+
+    <div class="signin-skip">
+      <a onclick="continueWithoutAccount()">Continue without an account</a>
+      <div class="signin-skip-note">Data stays on this device only. You can sign in later to sync.</div>
+    </div>
   </div>
 </div>
 
 <header class="top">
   <div>
     <h1>Hybrid Trainer</h1>
-    <small>v0.9.1</small>
+    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+      <small>v0.10</small>
+      <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
+    </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
       <span id="auth-email"></span>
       <button onclick="handleSignOut()">Sign out</button>
+    </div>
+    <div id="local-mode-actions" style="display:none; margin-top:6px;">
+      <button class="btn-small" onclick="goToSignIn()">Sign in to sync</button>
     </div>
   </div>
   <div class="header-actions">
@@ -700,7 +748,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.9.1 · cloud-sync-enabled web app · data lives in this browser's localStorage</small>
+    <small>v0.10 · cloud sync web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -766,6 +814,11 @@ async function checkAuth() {
   if (session && session.user) {
     currentUser = session.user;
     onSignedIn();
+  } else if (localStorage.getItem(LOCAL_ONLY_KEY) === '1') {
+    // User previously chose "Continue without account" — go straight to local mode
+    appMode = 'local';
+    document.getElementById('signin-overlay').style.display = 'none';
+    updateSyncIndicator();
   } else {
     showSignInOverlay();
   }
@@ -776,7 +829,13 @@ async function checkAuth() {
       onSignedIn();
     } else if (event === 'SIGNED_OUT') {
       currentUser = null;
+      // Clear local cache so a different account doesn't see this account's data
+      localStorage.removeItem(STORAGE_KEY);
+      state = { templates: [], history: [], currentSession: emptySession(), editingHistoryIndex: null };
+      const card = document.getElementById('delete-account-card');
+      if (card) card.style.display = 'none';
       showSignInOverlay();
+      renderLog();
     }
   });
 }
@@ -784,17 +843,103 @@ async function checkAuth() {
 function showSignInOverlay() {
   document.getElementById('signin-overlay').style.display = 'flex';
   document.getElementById('auth-badge').style.display = 'none';
+  appMode = 'unauthenticated';
+  updateSyncIndicator();
 }
 
-function onSignedIn() {
+// Called after a successful sign-in. Handles the four scenarios:
+//   - Cloud empty + local empty: nothing to do
+//   - Cloud empty + local has data: ask to upload
+//   - Cloud has data + local empty: pull
+//   - Cloud has data + local has data: ask to keep cloud or replace with local
+async function onSignedIn() {
   document.getElementById('signin-overlay').style.display = 'none';
   document.getElementById('auth-badge').style.display = 'inline-flex';
   document.getElementById('auth-email').textContent = currentUser.email || 'signed in';
-  // Show the delete-account card in Settings now that we have an account to delete
   const card = document.getElementById('delete-account-card');
   if (card) card.style.display = 'block';
-  // (Data sync will hook in here in v0.10. For now we just render the app
-  //  using localStorage as before.)
+
+  appMode = 'cloud';
+  localStorage.removeItem(LOCAL_ONLY_KEY); // they signed in, no longer local-only
+  setSyncStatus('syncing');
+
+  // Read what's in the cloud first (without overwriting state yet)
+  let cloudSessions = [];
+  let cloudTemplates = [];
+  let cloudSettings = null;
+  try {
+    const [s, t, ss] = await Promise.all([
+      sb.from('sessions').select('id').limit(1),
+      sb.from('templates').select('id').limit(1),
+      sb.from('user_settings').select('user_id').eq('user_id', currentUser.id).maybeSingle()
+    ]);
+    if (s.error) throw s.error;
+    if (t.error) throw t.error;
+    cloudSessions = s.data || [];
+    cloudTemplates = t.data || [];
+    cloudSettings = ss.data;
+  } catch (e) {
+    console.error('Failed to check cloud:', e);
+    setSyncStatus('error');
+    alert('Could not reach your cloud account. Working in local mode for now. Sign out and try again later.');
+    appMode = 'local';
+    updateSyncIndicator();
+    renderLog();
+    return;
+  }
+
+  const hasLocal = (state.history.length > 0) || (state.templates.length > 0);
+  const hasCloud = cloudSessions.length > 0 || cloudTemplates.length > 0 || !!cloudSettings;
+
+  if (!hasLocal && !hasCloud) {
+    // Brand new account, brand new device. Nothing to do.
+    setSyncStatus('idle');
+    renderLog();
+    return;
+  }
+  if (!hasLocal && hasCloud) {
+    // Pull cloud into local
+    const r = await cloudPullAll();
+    if (!r.success) { alert('Failed to load your cloud data: ' + r.error); }
+    renderLog();
+    return;
+  }
+  if (hasLocal && !hasCloud) {
+    // First sign-in on a device with existing data
+    const localCount = state.history.length;
+    const tplCount = state.templates.length;
+    const msg = 'Found ' + localCount + ' session' + (localCount===1?'':'s') +
+                ' and ' + tplCount + ' template' + (tplCount===1?'':'s') +
+                ' on this device that aren\'t in your account yet.\n\n' +
+                'Upload them to your account so they sync across devices?\n\n' +
+                'OK = upload\nCancel = keep local only (you will see an empty account until you upload)';
+    if (confirm(msg)) {
+      const r = await cloudPushAll();
+      if (r.success) alert('Uploaded! Your data is now synced to your account.');
+      else alert('Upload failed: ' + r.error + '\nYour local data is safe, try again later.');
+    }
+    renderLog();
+    return;
+  }
+  // Both have data
+  const localCount = state.history.length;
+  const msg2 = 'Your account already has data, and this device has ' + localCount +
+               ' local session' + (localCount===1?'':'s') + '.\n\n' +
+               'OK = download account data (recommended, replaces local)\n' +
+               'Cancel = keep local data only (account data not changed)';
+  if (confirm(msg2)) {
+    const r = await cloudPullAll();
+    if (!r.success) alert('Failed to load cloud data: ' + r.error);
+  }
+  renderLog();
+}
+
+// Called when user clicks "Continue without account"
+function continueWithoutAccount() {
+  appMode = 'local';
+  localStorage.setItem(LOCAL_ONLY_KEY, '1');
+  document.getElementById('signin-overlay').style.display = 'none';
+  updateSyncIndicator();
   renderLog();
 }
 
@@ -1109,6 +1254,295 @@ function emptySession() {
   };
 }
 function emptyExercise(name = '') { return { name, sets: [], notes: '' }; }
+
+// =====================================================================
+// APP MODE
+// 'cloud': signed in, data syncs to Supabase, localStorage is cache
+// 'local': not signed in, localStorage only, user chose "Continue without account"
+// 'unauthenticated': not signed in, not chosen local-only yet (shows sign-in card)
+// =====================================================================
+let appMode = 'unauthenticated';
+const LOCAL_ONLY_KEY = 'hybridTrainerLocalOnly'; // remembers if user chose local-only
+
+// Sync status: 'idle' | 'syncing' | 'error'
+let syncStatus = 'idle';
+let pendingSyncCount = 0;
+
+function setSyncStatus(status) {
+  syncStatus = status;
+  updateSyncIndicator();
+}
+function updateSyncIndicator() {
+  const el = document.getElementById('sync-indicator');
+  const localActions = document.getElementById('local-mode-actions');
+  if (localActions) {
+    localActions.style.display = (appMode === 'local') ? 'block' : 'none';
+  }
+  if (!el) return;
+  if (appMode === 'local') {
+    el.style.display = 'inline-flex';
+    el.className = 'sync-indicator local';
+    el.textContent = 'Local only';
+    return;
+  }
+  if (appMode !== 'cloud') { el.style.display = 'none'; return; }
+  el.style.display = 'inline-flex';
+  if (syncStatus === 'syncing' || pendingSyncCount > 0) {
+    el.className = 'sync-indicator syncing';
+    el.textContent = 'Syncing...';
+  } else if (syncStatus === 'error') {
+    el.className = 'sync-indicator error';
+    el.textContent = 'Sync error';
+  } else {
+    el.className = 'sync-indicator synced';
+    el.textContent = 'Synced';
+  }
+}
+
+// Called from header button when user wants to sign in from local mode
+function goToSignIn() {
+  // Note: do NOT clear localStorage here. If they sign in successfully,
+  // onSignedIn will detect their local data and offer to upload.
+  localStorage.removeItem(LOCAL_ONLY_KEY);
+  appMode = 'unauthenticated';
+  showSignInOverlay();
+}
+
+// =====================================================================
+// CLOUD DATA LAYER
+// Row shape in Supabase:
+//   sessions table: id (uuid), user_id, date, start_time, end_time, end_date,
+//     bodyweight, name, phase, type, exercises (jsonb), run_data (jsonb),
+//     cond_data (jsonb), notes, created_at, updated_at
+//   templates table: id, user_id, name, type, exercises (jsonb), updated_at
+//   user_settings table: user_id (PK), theme, time_format, units, distance_unit,
+//     intensity, default_phase, updated_at
+// =====================================================================
+
+// Convert a session from local JS shape to DB row
+function sessionToRow(session, userId) {
+  return {
+    id: session.id || crypto.randomUUID(),
+    user_id: userId,
+    date: session.date,
+    start_time: session.startTime || null,
+    end_time: session.endTime || null,
+    end_date: session.endDate || null,
+    bodyweight: session.bodyweight || null,
+    name: session.name || null,
+    phase: session.phase || null,
+    type: session.type,
+    exercises: session.exercises || [],
+    run_data: session.runData || {},
+    cond_data: session.condData || {},
+    notes: session.notes || '',
+    updated_at: new Date().toISOString()
+  };
+}
+// Convert DB row back to local JS shape
+function rowToSession(row) {
+  return {
+    id: row.id,
+    date: row.date,
+    startTime: row.start_time || '',
+    endTime: row.end_time || '',
+    endDate: row.end_date || '',
+    bodyweight: row.bodyweight || '',
+    name: row.name || '',
+    phase: row.phase || '',
+    type: row.type,
+    exercises: row.exercises || [],
+    runData: row.run_data || {},
+    condData: row.cond_data || {},
+    notes: row.notes || ''
+  };
+}
+function templateToRow(template, userId) {
+  return {
+    id: template.id || crypto.randomUUID(),
+    user_id: userId,
+    name: template.name,
+    type: template.type,
+    exercises: template.exercises || [],
+    updated_at: new Date().toISOString()
+  };
+}
+function rowToTemplate(row) {
+  return { id: row.id, name: row.name, type: row.type, exercises: row.exercises || [] };
+}
+function settingsToRow(s, userId) {
+  return {
+    user_id: userId,
+    theme: s.theme,
+    time_format: s.timeFormat,
+    units: s.units,
+    distance_unit: s.distanceUnit,
+    intensity: s.intensity,
+    default_phase: s.defaultPhase || '',
+    updated_at: new Date().toISOString()
+  };
+}
+function rowToSettings(row) {
+  return {
+    theme: row.theme || 'auto',
+    timeFormat: row.time_format || '24',
+    units: row.units || 'lb',
+    distanceUnit: row.distance_unit || 'mi',
+    intensity: row.intensity || 'rpe',
+    defaultPhase: row.default_phase || ''
+  };
+}
+
+// Pull everything from cloud into state. Called once on sign-in.
+async function cloudPullAll() {
+  if (!sb || !currentUser) return { success: false, error: 'Not signed in' };
+  setSyncStatus('syncing');
+  try {
+    const [sessions, templates, settingsRow] = await Promise.all([
+      sb.from('sessions').select('*').order('date', { ascending: false }),
+      sb.from('templates').select('*').order('name'),
+      sb.from('user_settings').select('*').eq('user_id', currentUser.id).maybeSingle()
+    ]);
+    if (sessions.error) throw sessions.error;
+    if (templates.error) throw templates.error;
+    if (settingsRow.error) throw settingsRow.error;
+
+    state.history = (sessions.data || []).map(rowToSession);
+    state.templates = (templates.data || []).map(rowToTemplate);
+    if (settingsRow.data) {
+      Object.assign(settings, rowToSettings(settingsRow.data));
+    }
+    state.currentSession = emptySession();
+    saveState(); // cache locally
+    saveSettings();
+    setSyncStatus('idle');
+    return { success: true };
+  } catch (e) {
+    console.error('cloudPullAll failed:', e);
+    setSyncStatus('error');
+    return { success: false, error: e.message };
+  }
+}
+
+// Push ALL local data to cloud. Used on first sign-in if user opts to upload.
+async function cloudPushAll() {
+  if (!sb || !currentUser) return { success: false, error: 'Not signed in' };
+  setSyncStatus('syncing');
+  try {
+    const userId = currentUser.id;
+    // Stamp ids on any local rows that don't have them, so upsert works.
+    state.history.forEach(s => { if (!s.id) s.id = crypto.randomUUID(); });
+    state.templates.forEach(t => { if (!t.id) t.id = crypto.randomUUID(); });
+
+    const sessionRows = state.history.map(s => sessionToRow(s, userId));
+    const templateRows = state.templates.map(t => templateToRow(t, userId));
+    const settingsRow = settingsToRow(settings, userId);
+
+    // upsert: insert if new, update if id exists. Chunk in case of many rows.
+    if (sessionRows.length > 0) {
+      const { error } = await sb.from('sessions').upsert(sessionRows);
+      if (error) throw error;
+    }
+    if (templateRows.length > 0) {
+      const { error } = await sb.from('templates').upsert(templateRows);
+      if (error) throw error;
+    }
+    const { error: e3 } = await sb.from('user_settings').upsert(settingsRow);
+    if (e3) throw e3;
+
+    saveState();
+    setSyncStatus('idle');
+    return { success: true };
+  } catch (e) {
+    console.error('cloudPushAll failed:', e);
+    setSyncStatus('error');
+    return { success: false, error: e.message };
+  }
+}
+
+// Push a single session (insert or update). Used on every save.
+async function cloudPushSession(session) {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  pendingSyncCount++;
+  setSyncStatus('syncing');
+  try {
+    if (!session.id) session.id = crypto.randomUUID();
+    const { error } = await sb.from('sessions').upsert(sessionToRow(session, currentUser.id));
+    if (error) throw error;
+  } catch (e) {
+    console.error('cloudPushSession failed:', e);
+    setSyncStatus('error');
+  } finally {
+    pendingSyncCount--;
+    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
+    else updateSyncIndicator();
+  }
+}
+async function cloudDeleteSession(sessionId) {
+  if (appMode !== 'cloud' || !sb || !currentUser || !sessionId) return;
+  pendingSyncCount++;
+  setSyncStatus('syncing');
+  try {
+    const { error } = await sb.from('sessions').delete().eq('id', sessionId);
+    if (error) throw error;
+  } catch (e) {
+    console.error('cloudDeleteSession failed:', e);
+    setSyncStatus('error');
+  } finally {
+    pendingSyncCount--;
+    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
+    else updateSyncIndicator();
+  }
+}
+async function cloudPushTemplate(template) {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  pendingSyncCount++;
+  setSyncStatus('syncing');
+  try {
+    if (!template.id) template.id = crypto.randomUUID();
+    const { error } = await sb.from('templates').upsert(templateToRow(template, currentUser.id));
+    if (error) throw error;
+  } catch (e) {
+    console.error('cloudPushTemplate failed:', e);
+    setSyncStatus('error');
+  } finally {
+    pendingSyncCount--;
+    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
+    else updateSyncIndicator();
+  }
+}
+async function cloudDeleteTemplate(templateId) {
+  if (appMode !== 'cloud' || !sb || !currentUser || !templateId) return;
+  pendingSyncCount++;
+  setSyncStatus('syncing');
+  try {
+    const { error } = await sb.from('templates').delete().eq('id', templateId);
+    if (error) throw error;
+  } catch (e) {
+    console.error('cloudDeleteTemplate failed:', e);
+    setSyncStatus('error');
+  } finally {
+    pendingSyncCount--;
+    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
+    else updateSyncIndicator();
+  }
+}
+async function cloudPushSettings() {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  pendingSyncCount++;
+  setSyncStatus('syncing');
+  try {
+    const { error } = await sb.from('user_settings').upsert(settingsToRow(settings, currentUser.id));
+    if (error) throw error;
+  } catch (e) {
+    console.error('cloudPushSettings failed:', e);
+    setSyncStatus('error');
+  } finally {
+    pendingSyncCount--;
+    if (pendingSyncCount === 0 && syncStatus !== 'error') setSyncStatus('idle');
+    else updateSyncIndicator();
+  }
+}
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -1691,8 +2125,11 @@ function saveCurrentAsTemplate() {
     sets: ex.sets.map(s => ({ type: s.type })),
     notes: ''
   }));
-  state.templates.push({ name, type: state.currentSession.type, exercises: tplExercises });
-  saveState(); alert('Template saved.'); renderTemplates();
+  const newTemplate = { id: crypto.randomUUID(), name, type: state.currentSession.type, exercises: tplExercises };
+  state.templates.push(newTemplate);
+  saveState();
+  cloudPushTemplate(newTemplate);
+  alert('Template saved.'); renderTemplates();
 }
 function loadTemplateIntoSession() {
   const idx = document.getElementById('template-picker').value;
@@ -1735,12 +2172,17 @@ function renameTemplate(i) {
   const name = prompt('New name?', state.templates[i].name);
   if (!name) return;
   state.templates[i].name = name;
-  saveState(); renderTemplates();
+  saveState();
+  cloudPushTemplate(state.templates[i]);
+  renderTemplates();
 }
 function deleteTemplate(i) {
   if (!confirm('Delete this template?')) return;
+  const removed = state.templates[i];
   state.templates.splice(i, 1);
-  saveState(); renderTemplates();
+  saveState();
+  if (removed && removed.id) cloudDeleteTemplate(removed.id);
+  renderTemplates();
 }
 
 function saveSessionToHistory() {
@@ -1816,15 +2258,25 @@ function saveSessionToHistory() {
   }
 
   if (state.editingHistoryIndex !== null) {
+    // ensure id is preserved on edit
+    if (!s.id && state.history[state.editingHistoryIndex].id) {
+      s.id = state.history[state.editingHistoryIndex].id;
+    }
     state.history[state.editingHistoryIndex] = JSON.parse(JSON.stringify(s));
     state.editingHistoryIndex = null;
     alert('Session updated.');
   } else {
+    if (!s.id) s.id = crypto.randomUUID();
     state.history.unshift(JSON.parse(JSON.stringify(s)));
     alert('Session saved.');
   }
+  const savedSession = state.history[state.editingHistoryIndex !== null ? state.editingHistoryIndex : 0]
+    || state.history.find(h => h.id === s.id);
   state.currentSession = emptySession();
-  saveState(); renderLog();
+  saveState();
+  // Background push to cloud (no-op in local mode)
+  if (savedSession) cloudPushSession(savedSession);
+  renderLog();
 }
 function clearSession() {
   if (state.editingHistoryIndex !== null) {
@@ -1959,6 +2411,7 @@ function summarizeSessionText(s) {
 }
 function deleteHistory(i) {
   if (!confirm('Delete this session permanently?')) return;
+  const removed = state.history[i];
   state.history.splice(i, 1);
   if (state.editingHistoryIndex === i) {
     state.editingHistoryIndex = null;
@@ -1966,7 +2419,9 @@ function deleteHistory(i) {
   } else if (state.editingHistoryIndex !== null && i < state.editingHistoryIndex) {
     state.editingHistoryIndex--;
   }
-  saveState(); renderHistory();
+  saveState();
+  if (removed && removed.id) cloudDeleteSession(removed.id);
+  renderHistory();
 }
 
 // =====================================================================
@@ -2285,13 +2740,20 @@ function renderSettings() {
   document.getElementById('set-intensity').value = settings.intensity;
   document.getElementById('set-defaultphase').value = settings.defaultPhase || '';
 }
-function updateSetting(key, value) { settings[key] = value; saveSettings(); }
+function updateSetting(key, value) {
+  settings[key] = value;
+  saveSettings();
+  cloudPushSettings();
+}
 function nukeAllData() {
-  const confirm1 = prompt('This permanently deletes ALL data. Type DELETE (all caps) to confirm:');
+  const cloudNote = (appMode === 'cloud')
+    ? '\n\nNote: this only wipes data on THIS device. Your cloud account is unaffected.\nIf you sign in again, your cloud data will redownload.'
+    : '';
+  const confirm1 = prompt('This permanently deletes ALL data on this device.' + cloudNote + '\n\nType DELETE (all caps) to confirm:');
   if (confirm1 !== 'DELETE') { alert('Cancelled.'); return; }
   localStorage.removeItem(STORAGE_KEY);
   state = { templates: [], history: [], currentSession: emptySession(), editingHistoryIndex: null };
-  alert('All data deleted.');
+  alert('All local data deleted.');
   renderLog(); renderHistory(); renderTemplates();
 }
 
