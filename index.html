@@ -1,7 +1,15 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.16.0 — richer tempo + interval runs
+  HYBRID TRAINER v0.16.1 — race warm-up/cool-down breakout + iOS status-bar fix
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.16.0:
+    - Race runs now log warm-up and cool-down apart from the race effort.
+      distance/time/pace are relabeled "Race distance/time/pace"; the values
+      stay in the same fields so old races and the Stats pace chart are
+      unaffected. (RUN_TYPES.race)
+    - Fixed the PWA header on iPhone: the title no longer sits under the iOS
+      status-bar clock. Body top padding now adds env(safe-area-inset-top).
 
   What's new vs v0.15.0:
     - Tempo runs now track the work portion separately: warm-up, tempo
@@ -132,7 +140,7 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, system-ui, sans-serif;
     background: var(--bg); color: var(--text);
     line-height: 1.5; min-height: 100vh;
-    padding: 16px 16px calc(80px + env(safe-area-inset-bottom)) 16px;
+    padding: calc(16px + env(safe-area-inset-top)) 16px calc(80px + env(safe-area-inset-bottom)) 16px;
     max-width: 720px; margin: 0 auto;
     font-size: 15px; -webkit-font-smoothing: antialiased;
   }
@@ -574,7 +582,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.16.0</small>
+      <small>v0.16.1</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -849,7 +857,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.16.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.16.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -880,7 +888,7 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1295,11 +1303,16 @@ const RUN_TYPES = {
   },
   race: {
     name: 'Race',
+    // The race effort (distance/time/pace) is logged apart from warm-up and
+    // cool-down miles. distance/time/pace stay as the race portion so old race
+    // sessions, the Stats pace chart, and the pace sanity check keep working.
     fields: [
-      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
-      { key: 'time', label: 'Time', placeholder: '42:18', type: 'text', validate: 'duration' },
-      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
+      { key: 'warmup', label: 'Warm-up', placeholder: '1.5 mi easy', type: 'text' },
+      { key: 'distance', label: 'Race distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Race time', placeholder: '42:18', type: 'text', validate: 'duration' },
+      { key: 'pace', label: 'Race pace', unit: 'pace', type: 'text', validate: 'pace' },
       { key: 'result', label: 'Result / Place', placeholder: '23rd OA, 3rd AG', type: 'text' },
+      { key: 'cooldown', label: 'Cool-down', placeholder: '1 mi jog', type: 'text' },
       { key: 'notes', label: 'Notes', placeholder: 'Race conditions, splits, etc', type: 'textarea' }
     ]
   }

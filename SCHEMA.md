@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 9
+## Current schema version: 12
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -151,20 +151,24 @@ Run sessions have a `runType` field that determines which other fields are meani
 **`easy`** — Easy / Zone 2
 - `distance`, `time`, `pace`, `hr`, `rpe`, `notes`
 
-**`tempo`** — Tempo / Threshold
-- `distance`, `time`, `pace`, `hr`, `notes`
-- No RPE: the pace target is the effort target
+**`tempo`** — Tempo / Threshold (work portion tracked separately as of v0.16)
+- `warmup`, `tempoDistance`, `tempoTime`, `tempoPace`, `cooldown`, `distance` (total), `time` (total), `hr`, `notes`
+- The tempo (work) segment is logged apart from the whole run, e.g. `warmup: "0.5 mi"`, `tempoTime: "20:00"`, `tempoPace: "8:30"`, `cooldown: "1 mi"`.
+- Pre-v0.16 tempo runs used a flat `distance`/`time`/`pace`. Those old fields stay in the JSON (not destroyed); `pace` just no longer has its own input. The Stats pace chart reads `pace` and falls back to `tempoPace` for tempo runs.
 
-**`intervals`** — Intervals / Track
-- `workout` (e.g. "6x800m"), `targetPace`, `recovery`, `splits`, `totalDistance`, `totalTime`, `notes`
-- No avg pace or HR: splits are the data
+**`intervals`** — Intervals / Track (repeatable sets as of v0.16)
+- `intervalSets` (array), plus `splits`, `totalDistance`, `totalTime`, `notes`
+- `intervalSets` is a list of blocks so you can log more than one distance/goal in a session. Each block: `{ reps, distance, goal, recovery }`, e.g. `[{"reps":"5","distance":"400m","goal":"1:30","recovery":"90s jog"},{"reps":"2","distance":"200m","goal":"0:45","recovery":""}]`.
+- Pre-v0.16 intervals used a single `workout`/`targetPace`/`recovery` text triple. Old data is preserved but the new UI uses `intervalSets`.
 
 **`long`** — Long Run
 - `distance`, `time`, `pace`, `hr`, `rpe`, `fueling`, `notes`
 
-**`race`** — Race
-- `distance`, `time`, `pace`, `result`, `notes`
+**`race`** — Race (warm-up/cool-down tracked separately as of v0.16.1)
+- `warmup`, `distance`, `time`, `pace`, `result`, `cooldown`, `notes`
+- The race effort stays in `distance`/`time`/`pace` (now labeled "Race distance/time/pace" in the UI). `warmup` and `cooldown` are free text for the miles run around the race, e.g. `warmup: "1.5 mi easy"`, `cooldown: "1 mi jog"`.
 - No RPE, no HR: result is the data
+- Pre-v0.16.1 race runs only had `distance`/`time`/`pace`/`result`/`notes`. Those fields are unchanged, so old races display correctly with empty warm-up/cool-down. The Stats pace chart still reads `pace`.
 
 ### Backwards compatibility
 
@@ -183,7 +187,9 @@ Old runs from before v0.5 don't have a `runType` field. The app treats those as 
 
 ## Template object
 
-A template is a saved exercise list with the structure stripped of actual logged values.
+A template is a reusable plan. As of schema v10 it has three flavors keyed off `type`: `lifts`, `run`, and `conditioning`. Only the payload for that type is populated.
+
+**Lifts template** — an exercise list with set types but no logged values:
 
 ```json
 {
@@ -204,7 +210,31 @@ A template is a saved exercise list with the structure stripped of actual logged
 }
 ```
 
-Templates only store exercise names and set types. They never store weights or reps. The `id` field was added in v8 alongside cloud sync; old templates without an id get one assigned on first upload.
+**Run template** — a run type plus optional target distance/pace (added v10):
+
+```json
+{
+  "id": "...",
+  "name": "Tempo 5k",
+  "type": "run",
+  "exercises": [],
+  "runData": { "runType": "tempo", "distance": "5", "pace": "4:30" }
+}
+```
+
+**Conditioning template** — a modality plus optional target work (added v10):
+
+```json
+{
+  "id": "...",
+  "name": "Row Intervals",
+  "type": "conditioning",
+  "exercises": [],
+  "condData": { "modality": "Row", "total": "5x500m" }
+}
+```
+
+Lifts templates store exercise names and set types only — never weights or reps. Run/conditioning templates store *target* values only; you fill the actual numbers each session. The `id` field was added in v8 alongside cloud sync; old templates without an id get one assigned on first upload. `runData`/`condData` are omitted (not sent to the cloud) for lifts templates, so lifts templates remain compatible with a `templates` table that predates the v10 `run_data`/`cond_data` columns.
 
 ## Settings object
 
@@ -266,11 +296,54 @@ Indexes: `(user_id, date desc)`, `(user_id, type)`.
 | `id` | uuid (PK) | Same value as the local `id` field. |
 | `user_id` | uuid | FK to `auth.users(id)`. Cascade on delete. |
 | `name` | text | |
-| `type` | text | Currently always `lifts`. |
-| `exercises` | jsonb | Same array as local. |
+| `type` | text | `lifts`, `run`, or `conditioning` (v10). |
+| `exercises` | jsonb | Lifts exercise array. Empty for run/conditioning. |
+| `run_data` | jsonb | Run template targets `{runType, distance, pace}`. Null for non-run. Added v10. |
+| `cond_data` | jsonb | Conditioning template targets `{modality, total}`. Null for non-conditioning. Added v10. |
 | `created_at`, `updated_at` | timestamptz | |
 
 Index: `(user_id)`.
+
+Migration to add the v10 columns (run once in the Supabase SQL editor):
+
+```sql
+alter table templates
+  add column if not exists run_data jsonb,
+  add column if not exists cond_data jsonb;
+```
+
+### `starter_templates` table (v10 / app v0.15)
+
+A read-only library of preset templates anyone can browse and copy into their own templates. No `user_id` — it's shared, not per-user. RLS allows `select` for everyone (including anon); writes happen only in the Supabase dashboard.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | `gen_random_uuid()` default. |
+| `name` | text | |
+| `type` | text | `lifts`, `run`, or `conditioning`. |
+| `category` | text | Optional secondary label (e.g. "Push", "Threshold"). |
+| `exercises` | jsonb | Lifts exercise array; empty for run/conditioning. |
+| `run_data` | jsonb | `{runType, distance, pace}` for run presets. |
+| `cond_data` | jsonb | `{modality, total}` for conditioning presets. |
+| `sort_order` | int | Display order, ascending. |
+| `created_at` | timestamptz | Server-set. |
+
+```sql
+create table if not exists starter_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  type text not null check (type in ('lifts','run','conditioning')),
+  category text,
+  exercises jsonb default '[]'::jsonb,
+  run_data jsonb,
+  cond_data jsonb,
+  sort_order int default 0,
+  created_at timestamptz default now()
+);
+alter table starter_templates enable row level security;
+create policy "starter_templates readable by anyone"
+  on starter_templates for select using (true);
+```
 
 ### `user_settings` table
 
@@ -327,7 +400,10 @@ Other notes:
 
 ## Schema version history
 
-- **v9** (current) — Added `displayName` and `avatar` fields to settings (and corresponding `display_name`, `avatar` columns to the cloud `user_settings` table). Both are optional; empty values fall back to email/no avatar. Backwards compatible: old exports/imports without these fields just leave them empty.
+- **v12** (current) — Race runs gained `warmup` and `cooldown` (free text), tracked apart from the race effort. The race effort stays in `distance`/`time`/`pace` (relabeled "Race distance/time/pace" in the UI), so old race sessions, the Stats pace chart, and the pace sanity check are unaffected. Additive and backwards compatible — no DB migration (run_data is jsonb).
+- **v11** — Run session data shape extended. Tempo runs gained `warmup`, `tempoDistance`, `tempoTime`, `tempoPace`, `cooldown` (work portion tracked apart from totals). Interval runs gained an `intervalSets` array (`{reps, distance, goal, recovery}` blocks) replacing the single `workout`/`targetPace` triple in the UI. Additive and backwards compatible — old run fields are preserved, no DB migration (run_data is jsonb).
+- **v10** — Templates gained `run` and `conditioning` types alongside `lifts`. Run templates carry `runData` `{runType, distance, pace}`; conditioning templates carry `condData` `{modality, total}`. Cloud `templates` table gained `run_data` and `cond_data` jsonb columns (migration required — see the `templates` table section). Backwards compatible: existing lifts templates are unchanged and don't send the new columns.
+- **v9** — Added `displayName` and `avatar` fields to settings (and corresponding `display_name`, `avatar` columns to the cloud `user_settings` table). Both are optional; empty values fall back to email/no avatar. Backwards compatible: old exports/imports without these fields just leave them empty.
 - **v8** — Added stable UUID `id` field to sessions and templates to support cloud sync. Added cloud database schema (Supabase tables: `sessions`, `templates`, `user_settings`) with Row Level Security. Local ↔ cloud field name mapping documented. Backwards compatible: old data without `id` gets one assigned on first cloud upload.
 - **v7** — Added optional `endDate` field for sessions crossing midnight. Added `distanceUnit` setting (mi/km) affecting run field labels and pace. Added inline format validation (visual red-border only, never blocks saving) and pre-save warnings for missing or inconsistent data. Backwards compatible: sessions without `endDate` are treated as same-day.
 - **v6** — Cleaned up phantom defaults: `runData` and `condData` are now only populated for sessions whose `type` matches. Added session-type-switch guard in the UI to warn before hiding data. Backwards compatible: old files with phantom defaults still import fine.
