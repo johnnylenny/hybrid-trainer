@@ -1,7 +1,21 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.15.0 — starter template library (schema v10)
+  HYBRID TRAINER v0.16.0 — richer tempo + interval runs
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.15.0:
+    - Tempo runs now track the work portion separately: warm-up, tempo
+      distance/time/pace, cool-down, plus total distance/time. (RUN_TYPES.tempo)
+    - Interval runs use a repeatable list of sets — each with reps, distance,
+      goal time, and recovery — instead of one "workout" text field. Stored in
+      runData.intervalSets. See renderIntervalSets / add/removeIntervalSet.
+    - History summary shows interval sets ("5x400m @ 1:30 + 2x200m @ 0:45").
+    - Stats run-pace chart falls back to tempoPace for tempo runs.
+    - No DB migration: run_data is jsonb, so the new shape just fits.
+
+  Older changelog below (v0.15.0 down) is informational.
+
+  -- v0.15.0 — starter template library (schema v10) --
 
   REQUIRES one-time Supabase migrations (see below). Run both in the
   Supabase SQL editor before deploying:
@@ -560,7 +574,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.15.0</small>
+      <small>v0.16.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -835,7 +849,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.15.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.16.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -866,7 +880,7 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1241,21 +1255,27 @@ const RUN_TYPES = {
   },
   tempo: {
     name: 'Tempo / Threshold',
+    // The tempo (work) portion is tracked separately from the whole run, so
+    // a "0.5 WU / 20 min @ 8:30 / 1 mi CD" session keeps its pieces distinct.
     fields: [
-      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
-      { key: 'time', label: 'Time', placeholder: '21:30', type: 'text', validate: 'duration' },
-      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
-      { key: 'hr', label: 'Avg HR', placeholder: '168', type: 'number', validate: 'hr' },
+      { key: 'warmup', label: 'Warm-up', placeholder: '0.5 mi easy', type: 'text' },
+      { key: 'tempoDistance', label: 'Tempo distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'tempoTime', label: 'Tempo time', placeholder: '20:00', type: 'text', validate: 'duration' },
+      { key: 'tempoPace', label: 'Tempo pace', unit: 'pace', type: 'text', validate: 'pace' },
+      { key: 'cooldown', label: 'Cool-down', placeholder: '1 mi easy', type: 'text' },
+      { key: 'distance', label: 'Total distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Total time', placeholder: '35:00', type: 'text', validate: 'duration' },
+      { key: 'hr', label: 'Avg HR (tempo)', placeholder: '168', type: 'number', validate: 'hr' },
       { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
     ]
   },
   intervals: {
     name: 'Intervals / Track',
+    // Intervals use a repeatable list of sets (reps x distance @ goal) instead
+    // of a single workout text field. Stored in runData.intervalSets.
+    hasIntervalSets: true,
     fields: [
-      { key: 'workout', label: 'Workout', placeholder: '6x800m', type: 'text' },
-      { key: 'targetPace', label: 'Target pace', placeholder: '3:00/800', type: 'text' },
-      { key: 'recovery', label: 'Recovery', placeholder: '2 min jog', type: 'text' },
-      { key: 'splits', label: 'Splits', placeholder: '2:58, 3:00, 2:59...', type: 'textarea' },
+      { key: 'splits', label: 'Splits / per-rep notes', placeholder: '2:58, 3:00, 2:59...', type: 'textarea' },
       { key: 'totalDistance', label: 'Total distance (incl. WU/CD)', unit: 'distance', type: 'text', validate: 'distance' },
       { key: 'totalTime', label: 'Total session time', placeholder: '45:00', type: 'text', validate: 'duration' },
       { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
@@ -1925,6 +1945,7 @@ function renderRunForm() {
   ).join('');
 
   const typeDef = RUN_TYPES[rd.runType] || RUN_TYPES.easy;
+  const intervalHtml = typeDef.hasIntervalSets ? renderIntervalSets(rd) : '';
   const fieldsHtml = typeDef.fields.map(f => renderRunField(f, rd)).join('');
 
   const area = document.getElementById('exercises-area');
@@ -1937,6 +1958,7 @@ function renderRunForm() {
         </select>
       </div>
       <div id="run-fields">
+        ${intervalHtml}
         ${fieldsHtml}
       </div>
     </div>`;
@@ -1946,6 +1968,60 @@ function renderRunForm() {
     const el = document.getElementById('run-' + f.key);
     if (el) el.addEventListener('input', () => updateRunField(f.key, el.value));
   });
+}
+
+// Repeatable interval sets (e.g. "5x400 @ 1:30" then "2x200 @ 0:45").
+// Stored in runData.intervalSets. Inputs update the model live via oninput,
+// so typing never triggers a re-render (no focus loss); only add/remove do.
+function renderIntervalSets(rd) {
+  if (!rd.intervalSets) rd.intervalSets = [];
+  const rows = rd.intervalSets.map((set, i) => `
+    <div class="card compact" style="margin-bottom:8px">
+      <div class="header-row" style="margin-bottom:6px">
+        <strong>Set ${i + 1}</strong>
+        <button class="btn-small" onclick="removeIntervalSet(${i})" title="Remove set">&times;</button>
+      </div>
+      <div class="row">
+        <div class="field"><label>Reps</label><input type="text" inputmode="numeric" value="${escapeHtml(set.reps || '')}" placeholder="5" oninput="updateIntervalSetField(${i},'reps',this.value)"></div>
+        <div class="field"><label>Distance</label><input type="text" value="${escapeHtml(set.distance || '')}" placeholder="400m" oninput="updateIntervalSetField(${i},'distance',this.value)"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Goal time</label><input type="text" value="${escapeHtml(set.goal || '')}" placeholder="1:30" oninput="updateIntervalSetField(${i},'goal',this.value)"></div>
+        <div class="field"><label>Recovery</label><input type="text" value="${escapeHtml(set.recovery || '')}" placeholder="90s jog" oninput="updateIntervalSetField(${i},'recovery',this.value)"></div>
+      </div>
+    </div>`).join('');
+  return `
+    <div style="margin-bottom:14px">
+      <label style="display:block; margin-bottom:8px">Interval sets</label>
+      ${rows || '<div class="muted" style="font-size:0.85rem; margin-bottom:8px">No interval sets yet. Add one below.</div>'}
+      <button class="btn-secondary" style="width:100%" onclick="addIntervalSet()">+ Add interval set</button>
+    </div>`;
+}
+function updateIntervalSetField(i, key, value) {
+  const rd = state.currentSession.runData;
+  if (!rd || !rd.intervalSets || !rd.intervalSets[i]) return;
+  rd.intervalSets[i][key] = value;
+  saveState();
+}
+function addIntervalSet() {
+  const rd = state.currentSession.runData;
+  if (!rd.intervalSets) rd.intervalSets = [];
+  rd.intervalSets.push({ reps: '', distance: '', goal: '', recovery: '' });
+  saveState();
+  renderRunForm();
+}
+function removeIntervalSet(i) {
+  const rd = state.currentSession.runData;
+  if (rd.intervalSets) rd.intervalSets.splice(i, 1);
+  saveState();
+  renderRunForm();
+}
+// One-line text for an interval set, e.g. "5x400m @ 1:30 (90s jog rec)".
+function intervalSetText(set) {
+  let t = `${set.reps || '?'}x${set.distance || '?'}`;
+  if (set.goal) t += ` @ ${set.goal}`;
+  if (set.recovery) t += ` (${set.recovery} rec)`;
+  return t;
 }
 
 function renderRunField(field, rd) {
@@ -2863,10 +2939,14 @@ function summarizeSessionText(s) {
     // summary based on whichever fields have data
     const r = s.runData || {};
     const typeDef = RUN_TYPES[r.runType] || RUN_TYPES.easy;
-    const lines = typeDef.fields
+    let parts = [];
+    if (typeDef.hasIntervalSets && Array.isArray(r.intervalSets) && r.intervalSets.length) {
+      parts.push(r.intervalSets.map(intervalSetText).join(' + '));
+    }
+    parts = parts.concat(typeDef.fields
       .filter(f => f.key !== 'notes' && r[f.key])
-      .map(f => `${resolveFieldLabel(f)}: ${r[f.key]}`);
-    out = lines.join(' · ');
+      .map(f => `${resolveFieldLabel(f)}: ${r[f.key]}`));
+    out = parts.join(' · ');
     if (r.notes) out += `\nnotes: ${r.notes}`;
   } else if (s.type === 'conditioning') {
     const c = s.condData || {};
@@ -3130,7 +3210,7 @@ function drawPaceChart(runType) {
   if (!ctx) return;
   const rows = state.history
     .filter(s => s.type === 'run' && s.runData && s.runData.runType === runType)
-    .map(s => ({ date: s.date, pace: paceToSeconds(s.runData.pace) }))
+    .map(s => ({ date: s.date, pace: paceToSeconds(s.runData.pace || s.runData.tempoPace) }))
     .filter(r => r.pace !== null)
     .sort((a, b) => a.date < b.date ? -1 : 1);
   if (rows.length === 0) { noData(ctx); return; }
