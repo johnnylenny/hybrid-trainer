@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 12
+## Current schema version: 13
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -176,14 +176,29 @@ Old runs from before v0.5 don't have a `runType` field. The app treats those as 
 
 ## Conditioning data (when type === "conditioning")
 
+Type-based as of v0.19.0 (schema v13), mirroring run types. `condType` selects the field set. Types and their fields:
+
+- **`erg`** (Row/Bike/Ski) — `machine`, `distance`, `time`, `split` (/500m), `watts`, `cal`, `hr`, `rpe`, `notes`
+- **`sled`** (Sled/Carry) — `movement`, `load`, `distance`, `rounds`, `time`, `rpe`, `notes`
+- **`ruck`** — `load`, `distance`, `time`, `pace`, `elevation`, `hr`, `rpe`, `notes`
+- **`metcon`** (Circuit/MetCon) — `format`, `duration`, `rounds`, `movements`, `rpe`, `notes`
+- **`other`** (General) — `modality`, `total`, `rpe`, `splits`, `notes`
+
 ```json
 {
-  "modality": "Rower",
-  "total": "6x500m",
-  "rpe": "8",
-  "splits": "1:45, 1:47, 1:46, 1:48, 1:50, 1:52"
+  "condType": "erg",
+  "machine": "Row",
+  "distance": "5000m",
+  "time": "20:00",
+  "split": "2:00",
+  "watts": "205",
+  "hr": "155",
+  "rpe": "7",
+  "notes": ""
 }
 ```
+
+**Backwards compatibility:** pre-v0.19.0 conditioning sessions had no `condType` and used `modality`/`total`/`rpe`/`splits`. On display they map to the `other` type (whose fields are exactly those keys), so old data still shows. New sessions default to `erg`. Switching type preserves orphaned fields in the JSON (hidden, not deleted), same as run types. No DB migration (`cond_data` is jsonb). Conditioning *templates* still store `{modality, total}` targets and load as the `other` type.
 
 ## Template object
 
@@ -400,7 +415,8 @@ Other notes:
 
 ## Schema version history
 
-- **v12** (current) — Race runs gained `warmup` and `cooldown` (free text), tracked apart from the race effort. The race effort stays in `distance`/`time`/`pace` (relabeled "Race distance/time/pace" in the UI), so old race sessions, the Stats pace chart, and the pace sanity check are unaffected. Additive and backwards compatible — no DB migration (run_data is jsonb).
+- **v13** (current) — Conditioning is now type-based (like run types). `condData` gained `condType` (`erg`/`sled`/`ruck`/`metcon`/`other`) and per-type fields. Pre-v13 conditioning sessions (`modality`/`total`/`rpe`/`splits`, no `condType`) map to the `other` type on display, so old data is preserved. Additive and backwards compatible — no DB migration (`cond_data` is jsonb).
+- **v12** — Race runs gained `warmup` and `cooldown` (free text), tracked apart from the race effort. The race effort stays in `distance`/`time`/`pace` (relabeled "Race distance/time/pace" in the UI), so old race sessions, the Stats pace chart, and the pace sanity check are unaffected. Additive and backwards compatible — no DB migration (run_data is jsonb).
 - **v11** — Run session data shape extended. Tempo runs gained `warmup`, `tempoDistance`, `tempoTime`, `tempoPace`, `cooldown` (work portion tracked apart from totals). Interval runs gained an `intervalSets` array (`{reps, distance, goal, recovery}` blocks) replacing the single `workout`/`targetPace` triple in the UI. Additive and backwards compatible — old run fields are preserved, no DB migration (run_data is jsonb).
 - **v10** — Templates gained `run` and `conditioning` types alongside `lifts`. Run templates carry `runData` `{runType, distance, pace}`; conditioning templates carry `condData` `{modality, total}`. Cloud `templates` table gained `run_data` and `cond_data` jsonb columns (migration required — see the `templates` table section). Backwards compatible: existing lifts templates are unchanged and don't send the new columns.
 - **v9** — Added `displayName` and `avatar` fields to settings (and corresponding `display_name`, `avatar` columns to the cloud `user_settings` table). Both are optional; empty values fall back to email/no avatar. Backwards compatible: old exports/imports without these fields just leave them empty.

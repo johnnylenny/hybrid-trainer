@@ -1,7 +1,15 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.18.1 — Settings grouped into sections
+  HYBRID TRAINER v0.19.0 — type-based conditioning (like run types)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.18.1:
+    - Conditioning is now type-based like runs. COND_TYPES: Erg (Row/Bike/Ski),
+      Sled/Carry, Ruck, Circuit/MetCon, and Other/General — each with its own
+      fields. condData.condType drives the form (renderCondForm/renderCondField/
+      changeCondType/updateCondField). Old conditioning sessions (modality/total/
+      rpe/splits, no condType) map to "Other" so their data still shows. Schema
+      v13, additive, no DB migration (cond_data is jsonb).
 
   What's new vs v0.18.0:
     - Settings page broken into labeled sections (Profile, Appearance,
@@ -624,7 +632,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.18.1</small>
+      <small>v0.19.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -904,7 +912,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.18.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.19.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -935,7 +943,7 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1361,6 +1369,73 @@ const RUN_TYPES = {
       { key: 'result', label: 'Result / Place', placeholder: '23rd OA, 3rd AG', type: 'text' },
       { key: 'cooldown', label: 'Cool-down', placeholder: '1 mi jog', type: 'text' },
       { key: 'notes', label: 'Notes', placeholder: 'Race conditions, splits, etc', type: 'textarea' }
+    ]
+  }
+};
+
+// Conditioning types and the fields each one shows. Mirrors RUN_TYPES.
+// renderCondForm reads this. "other" is the legacy-compatible general logger:
+// old conditioning sessions (modality/total/rpe/splits, no condType) map to it
+// so their data still displays. New sessions default to "erg".
+const COND_TYPES = {
+  erg: {
+    name: 'Erg (Row/Bike/Ski)',
+    fields: [
+      { key: 'machine', label: 'Machine', placeholder: 'Row, Bike, Ski, AirDyne', type: 'text' },
+      { key: 'distance', label: 'Distance', placeholder: '5000m', type: 'text' },
+      { key: 'time', label: 'Time', placeholder: '20:00', type: 'text', validate: 'duration' },
+      { key: 'split', label: 'Avg split (/500m)', placeholder: '1:52', type: 'text' },
+      { key: 'watts', label: 'Avg watts', placeholder: '210', type: 'number' },
+      { key: 'cal', label: 'Calories', placeholder: '320', type: 'number' },
+      { key: 'hr', label: 'Avg HR', placeholder: '155', type: 'number', validate: 'hr' },
+      { key: 'rpe', label: 'RPE', placeholder: '7', type: 'number', min: 1, max: 10, validate: 'rpe' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  sled: {
+    name: 'Sled / Carry',
+    fields: [
+      { key: 'movement', label: 'Movement', placeholder: 'Sled push, Farmer carry', type: 'text' },
+      { key: 'load', label: 'Load', placeholder: '180 lb', type: 'text' },
+      { key: 'distance', label: 'Distance', placeholder: '40m', type: 'text' },
+      { key: 'rounds', label: 'Rounds', placeholder: '6', type: 'text' },
+      { key: 'time', label: 'Time', placeholder: '12:00', type: 'text', validate: 'duration' },
+      { key: 'rpe', label: 'RPE', placeholder: '8', type: 'number', min: 1, max: 10, validate: 'rpe' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  ruck: {
+    name: 'Ruck',
+    fields: [
+      { key: 'load', label: 'Load', placeholder: '35 lb', type: 'text' },
+      { key: 'distance', label: 'Distance', unit: 'distance', type: 'text', validate: 'distance' },
+      { key: 'time', label: 'Time', placeholder: '45:00', type: 'text', validate: 'duration' },
+      { key: 'pace', label: 'Avg pace', unit: 'pace', type: 'text', validate: 'pace' },
+      { key: 'elevation', label: 'Elevation gain', placeholder: '400 ft', type: 'text' },
+      { key: 'hr', label: 'Avg HR', placeholder: '130', type: 'number', validate: 'hr' },
+      { key: 'rpe', label: 'RPE', placeholder: '5', type: 'number', min: 1, max: 10, validate: 'rpe' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  metcon: {
+    name: 'Circuit / MetCon',
+    fields: [
+      { key: 'format', label: 'Format', placeholder: 'AMRAP, EMOM, For time', type: 'text' },
+      { key: 'duration', label: 'Time / cap', placeholder: '20:00', type: 'text' },
+      { key: 'rounds', label: 'Rounds / score', placeholder: '5 rounds + 12', type: 'text' },
+      { key: 'movements', label: 'Movements', placeholder: '10 thrusters, 15 pull-ups, 200m run', type: 'textarea' },
+      { key: 'rpe', label: 'RPE', placeholder: '9', type: 'number', min: 1, max: 10, validate: 'rpe' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  other: {
+    name: 'Other / General',
+    fields: [
+      { key: 'modality', label: 'Modality', placeholder: 'Row, Bike, AirDyne, Swim', type: 'text' },
+      { key: 'total', label: 'Total work', placeholder: '6x500m', type: 'text' },
+      { key: 'rpe', label: 'RPE', placeholder: '7', type: 'number', min: 1, max: 10, validate: 'rpe' },
+      { key: 'splits', label: 'Splits / details', placeholder: '', type: 'textarea' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
     ]
   }
 };
@@ -1970,7 +2045,7 @@ async function onSessionTypeChangeRequest(selectEl) {
   } else if (oldType === 'run' && s.runData && Object.keys(s.runData).some(k => k !== 'runType' && s.runData[k])) {
     hasOldData = true;
     oldDataDesc = 'run data';
-  } else if (oldType === 'conditioning' && s.condData && Object.keys(s.condData).some(k => s.condData[k])) {
+  } else if (oldType === 'conditioning' && s.condData && Object.keys(s.condData).some(k => k !== 'condType' && s.condData[k])) {
     hasOldData = true;
     oldDataDesc = 'conditioning data';
   }
@@ -2003,21 +2078,7 @@ function onSessionTypeChange() {
   const area = document.getElementById('exercises-area');
   if (type === 'lifts') { renderExercises(); }
   else if (type === 'run') { renderRunForm(); }
-  else if (type === 'conditioning') {
-    const cd = state.currentSession.condData || {};
-    area.innerHTML = `
-      <div class="card">
-        <h3>Conditioning</h3>
-        <div class="muted" style="margin-bottom:12px">Intervals, machines, anything</div>
-        <div class="row">
-          <div class="field"><label>Modality</label><input type="text" id="cond-modality" placeholder="Row, Bike, AirDyne" value="${escapeHtml(cd.modality||'')}"></div>
-          <div class="field"><label>Total work</label><input type="text" id="cond-total" placeholder="6x500m" value="${escapeHtml(cd.total||'')}"></div>
-          <div class="field"><label>RPE</label><input type="number" inputmode="numeric" id="cond-rpe" min="1" max="10" value="${escapeHtml(cd.rpe||'')}"></div>
-        </div>
-        <div class="field"><label>Splits / details</label><textarea id="cond-splits">${escapeHtml(cd.splits||'')}</textarea></div>
-      </div>`;
-    ['cond-modality','cond-total','cond-rpe','cond-splits'].forEach(id => document.getElementById(id).addEventListener('input', syncCondData));
-  }
+  else if (type === 'conditioning') { renderCondForm(); }
   updateFabVisibility();
   saveState();
 }
@@ -2188,14 +2249,110 @@ function updateRunField(key, value) {
   }
 }
 
-function syncCondData() {
-  state.currentSession.condData = {
-    modality: document.getElementById('cond-modality').value,
-    total: document.getElementById('cond-total').value,
-    rpe: document.getElementById('cond-rpe').value,
-    splits: document.getElementById('cond-splits').value
-  };
+// =====================================================================
+// CONDITIONING FORM (conditional fields based on conditioning type)
+// Mirrors the RUN FORM above. Stored in currentSession.condData.condType.
+// =====================================================================
+function renderCondForm() {
+  const cd = state.currentSession.condData || {};
+  if (!cd.condType) {
+    // Old sessions stored modality/total/splits with no type — show under "Other".
+    cd.condType = (cd.modality || cd.total || cd.splits) ? 'other' : 'erg';
+  }
+  state.currentSession.condData = cd;
+
+  const typeOptions = Object.keys(COND_TYPES).map(k =>
+    `<option value="${k}" ${cd.condType === k ? 'selected' : ''}>${escapeHtml(COND_TYPES[k].name)}</option>`
+  ).join('');
+  const typeDef = COND_TYPES[cd.condType] || COND_TYPES.other;
+  const fieldsHtml = typeDef.fields.map(f => renderCondField(f, cd)).join('');
+
+  const area = document.getElementById('exercises-area');
+  area.innerHTML = `
+    <div class="card">
+      <div class="field" style="margin-bottom:14px">
+        <label>Conditioning type</label>
+        <select id="cond-type-picker" onchange="changeCondType(this.value)">
+          ${typeOptions}
+        </select>
+      </div>
+      <div id="cond-fields">
+        ${fieldsHtml}
+      </div>
+    </div>`;
+
+  typeDef.fields.forEach(f => {
+    const el = document.getElementById('cond-' + f.key);
+    if (el) el.addEventListener('input', () => updateCondField(f.key, el.value));
+  });
+}
+
+function renderCondField(field, cd) {
+  const rawValue = cd[field.key] || '';
+  const value = escapeHtml(rawValue);
+  const label = escapeHtml(resolveFieldLabel(field));
+  const placeholder = escapeHtml(resolveFieldPlaceholder(field));
+  const id = 'cond-' + field.key;
+  const invalidClass = (field.validate && !validateField(field.validate, rawValue)) ? ' invalid' : '';
+
+  if (field.type === 'textarea') {
+    return `
+      <div class="field">
+        <label>${label}</label>
+        <textarea id="${id}" class="${invalidClass.trim()}" placeholder="${placeholder}">${value}</textarea>
+      </div>`;
+  }
+  if (field.type === 'number') {
+    const minMax = (field.min !== undefined ? `min="${field.min}"` : '') +
+                   (field.max !== undefined ? ` max="${field.max}"` : '');
+    return `
+      <div class="field">
+        <label>${label}</label>
+        <input type="number" inputmode="numeric" id="${id}" class="${invalidClass.trim()}" ${minMax}
+          placeholder="${placeholder}" value="${value}">
+      </div>`;
+  }
+  return `
+    <div class="field">
+      <label>${label}</label>
+      <input type="text" id="${id}" class="${invalidClass.trim()}" placeholder="${placeholder}" value="${value}">
+    </div>`;
+}
+
+async function changeCondType(newType) {
+  if (!COND_TYPES[newType]) return;
+  const cd = state.currentSession.condData || {};
+  const oldType = cd.condType;
+  if (oldType && oldType !== newType) {
+    const oldFields = (COND_TYPES[oldType] || COND_TYPES.other).fields.map(f => f.key);
+    const newFields = COND_TYPES[newType].fields.map(f => f.key);
+    const orphaned = oldFields.filter(k => !newFields.includes(k) && cd[k]);
+    if (orphaned.length > 0) {
+      if (!await modalConfirm(`Some fields from "${COND_TYPES[oldType].name}" don't exist in "${COND_TYPES[newType].name}". The data won't be deleted, but it won't be shown. Continue?`)) {
+        document.getElementById('cond-type-picker').value = oldType;
+        return;
+      }
+    }
+  }
+  cd.condType = newType;
+  state.currentSession.condData = cd;
   saveState();
+  renderCondForm();
+}
+
+function updateCondField(key, value) {
+  if (!state.currentSession.condData) state.currentSession.condData = {};
+  state.currentSession.condData[key] = value;
+  saveState();
+  const typeDef = COND_TYPES[state.currentSession.condData.condType] || COND_TYPES.other;
+  const field = typeDef.fields.find(f => f.key === key);
+  if (field && field.validate) {
+    const el = document.getElementById('cond-' + key);
+    if (el) {
+      if (validateField(field.validate, value)) el.classList.remove('invalid');
+      else el.classList.add('invalid');
+    }
+  }
 }
 
 // =====================================================================
@@ -2492,7 +2649,7 @@ function sessionHasContent() {
   const s = state.currentSession;
   if (s.exercises && s.exercises.length > 0) return true;
   if (s.runData && Object.keys(s.runData).some(k => k !== 'runType' && s.runData[k])) return true;
-  if (s.condData && Object.keys(s.condData).some(k => s.condData[k])) return true;
+  if (s.condData && Object.keys(s.condData).some(k => k !== 'condType' && s.condData[k])) return true;
   return false;
 }
 async function loadTemplateIntoSession() {
@@ -2983,12 +3140,15 @@ function renderHistory() {
     const meta = formatSessionMeta(s);
     const runTypeTag = (s.type === 'run' && s.runData && s.runData.runType && RUN_TYPES[s.runData.runType])
       ? `<span class="tag">${escapeHtml(RUN_TYPES[s.runData.runType].name)}</span>` : '';
+    const condTypeTag = (s.type === 'conditioning' && s.condData && s.condData.condType && COND_TYPES[s.condData.condType])
+      ? `<span class="tag">${escapeHtml(COND_TYPES[s.condData.condType].name)}</span>` : '';
     return `
       <div class="session-card ${s.type}" onclick="editHistorySession(${realIdx})">
         <div class="header-row" style="margin-bottom:4px">
           <h3>${escapeHtml(s.date)}${s.name ? ' ' + escapeHtml(s.name) : ''}
             <span class="tag">${s.type}</span>
             ${runTypeTag}
+            ${condTypeTag}
             ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
           </h3>
           <button class="btn-danger" onclick="event.stopPropagation(); deleteHistory(${realIdx})">Delete</button>
@@ -3040,7 +3200,12 @@ function summarizeSessionText(s) {
     if (r.notes) out += `\nnotes: ${r.notes}`;
   } else if (s.type === 'conditioning') {
     const c = s.condData || {};
-    out = `${c.modality||'-'} · ${c.total||'-'} · RPE ${c.rpe||'-'}\nsplits: ${c.splits||'-'}`;
+    const typeDef = COND_TYPES[c.condType] || COND_TYPES.other;
+    out = typeDef.fields
+      .filter(f => f.key !== 'notes' && c[f.key])
+      .map(f => `${resolveFieldLabel(f)}: ${c[f.key]}`)
+      .join(' · ');
+    if (c.notes) out += `\nnotes: ${c.notes}`;
   }
   if (s.notes) out += `\n\nsession notes: ${s.notes}`;
   return out;
