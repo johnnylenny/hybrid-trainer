@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 13
+## Current schema version: 14
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -182,7 +182,25 @@ Type-based as of v0.19.0 (schema v13), mirroring run types. `condType` selects t
 - **`sled`** (Sled/Carry) — `movement`, `load`, `distance`, `rounds`, `time`, `rpe`, `notes`
 - **`ruck`** — `load`, `distance`, `time`, `pace`, `elevation`, `hr`, `rpe`, `notes`
 - **`metcon`** (Circuit/MetCon) — `format`, `duration`, `rounds`, `movements`, `rpe`, `notes`
+- **`circuit`** (Hyrox/WOD, v0.20.0) — `format`, `totalTime`, `result`, `rpe`, `notes`, plus a `segments` array (see below)
 - **`other`** (General) — `modality`, `total`, `rpe`, `splits`, `notes`
+
+The `circuit` type adds a repeatable **`segments`** array, modeled on run `intervalSets`. Each entry is `{ label, target, result }` (all strings). Used for Hyrox races (8 runs + 8 stations) and CrossFit WODs (movement list). The array is only written once a segment is added — a blank form has no `segments` key, so it isn't flagged as having content. Switching away from `circuit` keeps the array in the JSON (hidden, not deleted), same as orphaned fields.
+
+```json
+{
+  "condType": "circuit",
+  "format": "Hyrox",
+  "totalTime": "1:12:30",
+  "result": "23rd OA",
+  "rpe": "9",
+  "segments": [
+    { "label": "Run 1km", "target": "1000m", "result": "4:32" },
+    { "label": "SkiErg", "target": "1000m", "result": "3:58" }
+  ],
+  "notes": ""
+}
+```
 
 ```json
 {
@@ -415,7 +433,8 @@ Other notes:
 
 ## Schema version history
 
-- **v13** (current) — Conditioning is now type-based (like run types). `condData` gained `condType` (`erg`/`sled`/`ruck`/`metcon`/`other`) and per-type fields. Pre-v13 conditioning sessions (`modality`/`total`/`rpe`/`splits`, no `condType`) map to the `other` type on display, so old data is preserved. Additive and backwards compatible — no DB migration (`cond_data` is jsonb).
+- **v14** (current) — Added the `circuit` conditioning type (Hyrox/WOD): `format`, `totalTime`, `result`, `rpe`, `notes`, plus a repeatable `segments` array (`{label, target, result}` rows, modeled on run `intervalSets`). For segment-based events — Hyrox races and CrossFit WODs. Additive and backwards compatible — no DB migration (`cond_data` is jsonb). `segments` is only written once a row is added, so blank forms aren't flagged as having content.
+- **v13** — Conditioning is now type-based (like run types). `condData` gained `condType` (`erg`/`sled`/`ruck`/`metcon`/`other`) and per-type fields. Pre-v13 conditioning sessions (`modality`/`total`/`rpe`/`splits`, no `condType`) map to the `other` type on display, so old data is preserved. Additive and backwards compatible — no DB migration (`cond_data` is jsonb).
 - **v12** — Race runs gained `warmup` and `cooldown` (free text), tracked apart from the race effort. The race effort stays in `distance`/`time`/`pace` (relabeled "Race distance/time/pace" in the UI), so old race sessions, the Stats pace chart, and the pace sanity check are unaffected. Additive and backwards compatible — no DB migration (run_data is jsonb).
 - **v11** — Run session data shape extended. Tempo runs gained `warmup`, `tempoDistance`, `tempoTime`, `tempoPace`, `cooldown` (work portion tracked apart from totals). Interval runs gained an `intervalSets` array (`{reps, distance, goal, recovery}` blocks) replacing the single `workout`/`targetPace` triple in the UI. Additive and backwards compatible — old run fields are preserved, no DB migration (run_data is jsonb).
 - **v10** — Templates gained `run` and `conditioning` types alongside `lifts`. Run templates carry `runData` `{runType, distance, pace}`; conditioning templates carry `condData` `{modality, total}`. Cloud `templates` table gained `run_data` and `cond_data` jsonb columns (migration required — see the `templates` table section). Backwards compatible: existing lifts templates are unchanged and don't send the new columns.

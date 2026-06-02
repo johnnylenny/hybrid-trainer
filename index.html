@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.19.0 — type-based conditioning (like run types)
+  HYBRID TRAINER v0.20.0 — segment-based conditioning (Hyrox / WOD type)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new vs v0.18.1:
@@ -632,7 +632,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.19.0</small>
+      <small>v0.20.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -912,7 +912,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.19.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.20.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1424,6 +1424,21 @@ const COND_TYPES = {
       { key: 'duration', label: 'Time / cap', placeholder: '20:00', type: 'text' },
       { key: 'rounds', label: 'Rounds / score', placeholder: '5 rounds + 12', type: 'text' },
       { key: 'movements', label: 'Movements', placeholder: '10 thrusters, 15 pull-ups, 200m run', type: 'textarea' },
+      { key: 'rpe', label: 'RPE', placeholder: '9', type: 'number', min: 1, max: 10, validate: 'rpe' },
+      { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
+    ]
+  },
+  circuit: {
+    name: 'Hyrox / WOD',
+    // Segment-based events (Hyrox races, CrossFit WODs). The workout is a
+    // repeatable list of segments stored in condData.segments — each row is
+    // {label, target, result}. Pre-seeded presets (Hyrox, Fran, Murph) will
+    // land here as templates later. hasSegments drives the list renderer.
+    hasSegments: true,
+    fields: [
+      { key: 'format', label: 'Format', placeholder: 'Hyrox, For time, AMRAP 20', type: 'text' },
+      { key: 'totalTime', label: 'Total time', placeholder: '1:12:30', type: 'text', validate: 'duration' },
+      { key: 'result', label: 'Result / score', placeholder: '5 rounds + 12, or 23rd OA', type: 'text' },
       { key: 'rpe', label: 'RPE', placeholder: '9', type: 'number', min: 1, max: 10, validate: 'rpe' },
       { key: 'notes', label: 'Notes', placeholder: '', type: 'textarea' }
     ]
@@ -2265,6 +2280,7 @@ function renderCondForm() {
     `<option value="${k}" ${cd.condType === k ? 'selected' : ''}>${escapeHtml(COND_TYPES[k].name)}</option>`
   ).join('');
   const typeDef = COND_TYPES[cd.condType] || COND_TYPES.other;
+  const segmentHtml = typeDef.hasSegments ? renderCondSegments(cd) : '';
   const fieldsHtml = typeDef.fields.map(f => renderCondField(f, cd)).join('');
 
   const area = document.getElementById('exercises-area');
@@ -2277,6 +2293,7 @@ function renderCondForm() {
         </select>
       </div>
       <div id="cond-fields">
+        ${segmentHtml}
         ${fieldsHtml}
       </div>
     </div>`;
@@ -2319,6 +2336,59 @@ function renderCondField(field, cd) {
     </div>`;
 }
 
+// Repeatable segment list for Hyrox races / WODs. Each segment is a
+// {label, target, result} row stored in condData.segments. Mirrors the run
+// intervalSets pattern: inputs update the model live via oninput (no re-render,
+// so no focus loss); only add/remove re-render. We never persist an empty
+// segments array, so a blank form isn't flagged as "having content".
+function renderCondSegments(cd) {
+  const segs = Array.isArray(cd.segments) ? cd.segments : [];
+  const rows = segs.map((seg, i) => `
+    <div class="card compact" style="margin-bottom:8px">
+      <div class="header-row" style="margin-bottom:6px">
+        <strong>${i + 1}</strong>
+        <button class="btn-small" onclick="removeCondSegment(${i})" title="Remove segment">&times;</button>
+      </div>
+      <div class="field"><label>Station / movement</label><input type="text" value="${escapeHtml(seg.label || '')}" placeholder="Run 1km, SkiErg, Thrusters" oninput="updateCondSegmentField(${i},'label',this.value)"></div>
+      <div class="row">
+        <div class="field"><label>Target</label><input type="text" value="${escapeHtml(seg.target || '')}" placeholder="1000m, 21 reps" oninput="updateCondSegmentField(${i},'target',this.value)"></div>
+        <div class="field"><label>Result</label><input type="text" value="${escapeHtml(seg.result || '')}" placeholder="4:32, 1:48 split" oninput="updateCondSegmentField(${i},'result',this.value)"></div>
+      </div>
+    </div>`).join('');
+  return `
+    <div style="margin-bottom:14px">
+      <label style="display:block; margin-bottom:8px">Segments</label>
+      ${rows || '<div class="muted" style="font-size:0.85rem; margin-bottom:8px">No segments yet. Add one below.</div>'}
+      <button class="btn-secondary" style="width:100%" onclick="addCondSegment()">+ Add segment</button>
+    </div>`;
+}
+function updateCondSegmentField(i, key, value) {
+  const cd = state.currentSession.condData;
+  if (!cd || !Array.isArray(cd.segments) || !cd.segments[i]) return;
+  cd.segments[i][key] = value;
+  saveState();
+}
+function addCondSegment() {
+  const cd = state.currentSession.condData;
+  if (!Array.isArray(cd.segments)) cd.segments = [];
+  cd.segments.push({ label: '', target: '', result: '' });
+  saveState();
+  renderCondForm();
+}
+function removeCondSegment(i) {
+  const cd = state.currentSession.condData;
+  if (Array.isArray(cd.segments)) cd.segments.splice(i, 1);
+  saveState();
+  renderCondForm();
+}
+// One-line text for a segment, e.g. "Run 1km (1000m): 4:32".
+function condSegmentText(seg) {
+  let t = seg.label || '(segment)';
+  if (seg.target) t += ` (${seg.target})`;
+  if (seg.result) t += `: ${seg.result}`;
+  return t;
+}
+
 async function changeCondType(newType) {
   if (!COND_TYPES[newType]) return;
   const cd = state.currentSession.condData || {};
@@ -2327,7 +2397,10 @@ async function changeCondType(newType) {
     const oldFields = (COND_TYPES[oldType] || COND_TYPES.other).fields.map(f => f.key);
     const newFields = COND_TYPES[newType].fields.map(f => f.key);
     const orphaned = oldFields.filter(k => !newFields.includes(k) && cd[k]);
-    if (orphaned.length > 0) {
+    // Segments are hidden (not deleted) when leaving a segment-based type.
+    const segmentsLost = (COND_TYPES[oldType] || {}).hasSegments &&
+      Array.isArray(cd.segments) && cd.segments.length && !COND_TYPES[newType].hasSegments;
+    if (orphaned.length > 0 || segmentsLost) {
       if (!await modalConfirm(`Some fields from "${COND_TYPES[oldType].name}" don't exist in "${COND_TYPES[newType].name}". The data won't be deleted, but it won't be shown. Continue?`)) {
         document.getElementById('cond-type-picker').value = oldType;
         return;
@@ -3201,10 +3274,14 @@ function summarizeSessionText(s) {
   } else if (s.type === 'conditioning') {
     const c = s.condData || {};
     const typeDef = COND_TYPES[c.condType] || COND_TYPES.other;
-    out = typeDef.fields
+    let parts = typeDef.fields
       .filter(f => f.key !== 'notes' && c[f.key])
-      .map(f => `${resolveFieldLabel(f)}: ${c[f.key]}`)
-      .join(' · ');
+      .map(f => `${resolveFieldLabel(f)}: ${c[f.key]}`);
+    out = parts.join(' · ');
+    if (typeDef.hasSegments && Array.isArray(c.segments) && c.segments.length) {
+      const segLines = c.segments.map(condSegmentText).join('\n');
+      out = out ? `${out}\n${segLines}` : segLines;
+    }
     if (c.notes) out += `\nnotes: ${c.notes}`;
   }
   if (s.notes) out += `\n\nsession notes: ${s.notes}`;
