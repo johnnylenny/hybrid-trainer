@@ -1,7 +1,12 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.18.0 — custom in-app modals + toasts (no more native dialogs)
+  HYBRID TRAINER v0.18.1 — Settings grouped into sections
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new vs v0.18.0:
+    - Settings page broken into labeled sections (Profile, Appearance,
+      Units & tracking, Data, Danger zone) instead of one long card. Markup
+      only; all control IDs unchanged, no JS logic change.
 
   What's new vs v0.17.0:
     - Replaced all native confirm()/prompt()/alert() with brand-styled in-app
@@ -619,7 +624,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.18.0</small>
+      <small>v0.18.1</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -799,6 +804,7 @@
     </div>
   </div>
 
+  <h2>Appearance</h2>
   <div class="card">
     <div class="setting-row">
       <div class="setting-label">
@@ -825,6 +831,10 @@
         </select>
       </div>
     </div>
+  </div>
+
+  <h2>Units &amp; tracking</h2>
+  <div class="card">
     <div class="setting-row">
       <div class="setting-label">
         <div class="title">Units</div>
@@ -894,7 +904,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.18.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.18.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
