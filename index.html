@@ -1,14 +1,21 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.12.2 — declutter header
+  HYBRID TRAINER v0.12.3 — no more startup nag + template-first start
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.12.1:
-    - Removed the Export/Import buttons from the page header. They already
-      live in Settings ("Export all data" / "Import from file"), so this
-      just drops the duplicate and cleans up the top bar.
+  What's new vs v0.12.2:
+    - Removed the "Your account already has data..." confirm() that fired on
+      EVERY startup. Boot now reconciles local + cloud silently: cloud is the
+      source of truth, but any local-only sessions/templates (e.g. a save that
+      failed to sync) are pushed up first so nothing is ever lost. No prompt.
+    - Session empty state is now template-first: when you have templates,
+      "Load a template" is the primary action and "Add exercise" is secondary.
+      When you have none, it prompts "Create a workout plan".
 
-  Schema unchanged. No data logic changed.
+  v0.12.2: Removed the duplicate Export/Import buttons from the page header
+  (they already live in Settings).
+
+  Schema unchanged.
 -->
 <html lang="en">
 <head>
@@ -510,7 +517,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.12.2</small>
+      <small>v0.12.3</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -785,7 +792,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.12.2 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.12.3 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -992,16 +999,32 @@ async function onSignedIn() {
     renderLog();
     return;
   }
-  // Both have data
-  const localCount = state.history.length;
-  const msg2 = 'Your account already has data, and this device has ' + localCount +
-               ' local session' + (localCount===1?'':'s') + '.\n\n' +
-               'OK = download account data (recommended, replaces local)\n' +
-               'Cancel = keep local data only (account data not changed)';
-  if (confirm(msg2)) {
-    const r = await cloudPullAll();
-    if (!r.success) alert('Failed to load cloud data: ' + r.error);
+  // Both local and cloud have data. Reconcile SILENTLY — no prompt on every boot.
+  // (Old behavior nagged with a confirm() every single startup. Gone.)
+  // Cloud is the source of truth, but we must never discard local sessions/templates
+  // that were created on this device and never reached the cloud (e.g. a save whose
+  // sync failed). So: stamp ids on any id-less local rows, find the ones the cloud
+  // doesn't have yet, push those up, THEN pull everything down.
+  try {
+    state.history.forEach(s => { if (!s.id) s.id = crypto.randomUUID(); });
+    state.templates.forEach(t => { if (!t.id) t.id = crypto.randomUUID(); });
+    const [allS, allT] = await Promise.all([
+      sb.from('sessions').select('id'),
+      sb.from('templates').select('id')
+    ]);
+    if (allS.error) throw allS.error;
+    if (allT.error) throw allT.error;
+    const cloudSessionIds = new Set((allS.data || []).map(r => r.id));
+    const cloudTemplateIds = new Set((allT.data || []).map(r => r.id));
+    const localOnlySessions = state.history.filter(s => !cloudSessionIds.has(s.id));
+    const localOnlyTemplates = state.templates.filter(t => !cloudTemplateIds.has(t.id));
+    for (const s of localOnlySessions) await cloudPushSession(s);
+    for (const t of localOnlyTemplates) await cloudPushTemplate(t);
+  } catch (e) {
+    console.error('Reconcile (push local-only) failed, will still pull:', e);
   }
+  const r = await cloudPullAll();
+  if (!r.success) alert('Failed to load your cloud data: ' + r.error);
   updateAuthBadge();
   renderLog();
 }
@@ -1958,14 +1981,37 @@ function syncCondData() {
 // =====================================================================
 // EXERCISES (lifts) - unchanged from v0.4
 // =====================================================================
+// Scrolls the "Load template" picker into view and focuses it, so the
+// empty-state "Load a template" button has somewhere obvious to send you.
+function focusTemplatePicker() {
+  const el = document.getElementById('template-picker');
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => el.focus(), 300);
+}
+
 function renderExercises() {
   const area = document.getElementById('exercises-area');
   const exs = state.currentSession.exercises;
   if (exs.length === 0) {
-    area.innerHTML = `<div class="card" style="text-align:center; padding:30px 16px;">
-      <div class="muted" style="margin-bottom:12px">No exercises yet</div>
-      <button class="btn" onclick="addExercise()">+ Add Exercise</button>
-    </div>`;
+    const hasTemplates = state.templates.length > 0;
+    if (hasTemplates) {
+      // Load template is the primary action — it's how you usually start.
+      // Add Exercise is demoted to a secondary "build it manually" option.
+      area.innerHTML = `<div class="card" style="text-align:center; padding:30px 16px;">
+        <div class="muted" style="margin-bottom:14px">Start fast — load one of your saved templates.</div>
+        <button class="btn" onclick="focusTemplatePicker()" style="font-size:1.05rem; padding:14px 20px;">Load a template</button>
+        <div class="muted" style="font-size:0.8rem; margin:16px 0 8px">— or —</div>
+        <button class="btn-secondary" onclick="addExercise()">+ Add exercise manually</button>
+      </div>`;
+    } else {
+      // No templates yet. Guide the user to build a reusable plan.
+      area.innerHTML = `<div class="card" style="text-align:center; padding:30px 16px;">
+        <div class="muted" style="margin-bottom:14px">No workout plans yet. Build one once, then load it any time.</div>
+        <button class="btn" onclick="addExercise()" style="font-size:1.05rem; padding:14px 20px;">Create a workout plan</button>
+        <div class="muted" style="font-size:0.8rem; margin-top:14px">Add your exercises, then tap "Save as Template" to reuse this plan.</div>
+      </div>`;
+    }
     return;
   }
   area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i, exs.length)).join('');
