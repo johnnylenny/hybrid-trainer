@@ -267,6 +267,27 @@ A template is a reusable plan. As of schema v10 it has three flavors keyed off `
 }
 ```
 
+**Circuit template** (Hyrox/WOD, added v0.21.0) — a `circuit` conditioning template that carries the segment skeleton. `segments` hold `label`/`target` with `result` left blank, so loading the template gives you the prescription to fill in:
+
+```json
+{
+  "id": "...",
+  "name": "Hyrox",
+  "type": "conditioning",
+  "exercises": [],
+  "condData": {
+    "condType": "circuit",
+    "format": "Hyrox",
+    "segments": [
+      { "label": "Run 1km", "target": "1000m", "result": "" },
+      { "label": "SkiErg", "target": "1000m", "result": "" }
+    ]
+  }
+}
+```
+
+Built-in presets (Hyrox, Fran, Murph, Cindy) ship in code as `WORKOUT_PRESETS` — circuit templates surfaced in the "Browse starter templates" section so they work offline with no Supabase seeding. "Add" deep-copies one into your own templates. Saving a logged circuit session as a template (`saveCurrentAsTemplate`) keeps `format` + segment `label`/`target` and drops the `result` values.
+
 Lifts templates store exercise names and set types only — never weights or reps. Run/conditioning templates store *target* values only; you fill the actual numbers each session. The `id` field was added in v8 alongside cloud sync; old templates without an id get one assigned on first upload. `runData`/`condData` are omitted (not sent to the cloud) for lifts templates, so lifts templates remain compatible with a `templates` table that predates the v10 `run_data`/`cond_data` columns.
 
 ## Settings object
@@ -433,7 +454,7 @@ Other notes:
 
 ## Schema version history
 
-- **v14** (current) — Added the `circuit` conditioning type (Hyrox/WOD): `format`, `totalTime`, `result`, `rpe`, `notes`, plus a repeatable `segments` array (`{label, target, result}` rows, modeled on run `intervalSets`). For segment-based events — Hyrox races and CrossFit WODs. Additive and backwards compatible — no DB migration (`cond_data` is jsonb). `segments` is only written once a row is added, so blank forms aren't flagged as having content.
+- **v14** (current) — Added the `circuit` conditioning type (Hyrox/WOD): `format`, `totalTime`, `result`, `rpe`, `notes`, plus a repeatable `segments` array (`{label, target, result}` rows, modeled on run `intervalSets`). For segment-based events — Hyrox races and CrossFit WODs. Additive and backwards compatible — no DB migration (`cond_data` is jsonb). `segments` is only written once a row is added, so blank forms aren't flagged as having content. *App v0.21.0* added circuit *templates* on top of this (built-in Hyrox/WOD presets in `WORKOUT_PRESETS`, deep-copied on add/load) — same `condData` shape, no schema change.
 - **v13** — Conditioning is now type-based (like run types). `condData` gained `condType` (`erg`/`sled`/`ruck`/`metcon`/`other`) and per-type fields. Pre-v13 conditioning sessions (`modality`/`total`/`rpe`/`splits`, no `condType`) map to the `other` type on display, so old data is preserved. Additive and backwards compatible — no DB migration (`cond_data` is jsonb).
 - **v12** — Race runs gained `warmup` and `cooldown` (free text), tracked apart from the race effort. The race effort stays in `distance`/`time`/`pace` (relabeled "Race distance/time/pace" in the UI), so old race sessions, the Stats pace chart, and the pace sanity check are unaffected. Additive and backwards compatible — no DB migration (run_data is jsonb).
 - **v11** — Run session data shape extended. Tempo runs gained `warmup`, `tempoDistance`, `tempoTime`, `tempoPace`, `cooldown` (work portion tracked apart from totals). Interval runs gained an `intervalSets` array (`{reps, distance, goal, recovery}` blocks) replacing the single `workout`/`targetPace` triple in the UI. Additive and backwards compatible — old run fields are preserved, no DB migration (run_data is jsonb).

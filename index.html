@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.20.0 — segment-based conditioning (Hyrox / WOD type)
+  HYBRID TRAINER v0.21.0 — Hyrox / WOD presets + circuit templates
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new vs v0.18.1:
@@ -632,7 +632,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.20.0</small>
+      <small>v0.21.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -912,7 +912,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.20.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.21.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -2704,8 +2704,16 @@ async function saveCurrentAsTemplate() {
       runData: { runType: rd.runType || 'easy', distance: rd.distance || '', pace: rd.pace || '' } };
   } else if (type === 'conditioning') {
     const cd = state.currentSession.condData || {};
-    newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
-      condData: { modality: cd.modality || '', total: cd.total || '' } };
+    if (cd.condType === 'circuit') {
+      // Keep the circuit skeleton (format + segment labels/targets); drop the
+      // result values so the template is a blank-to-fill workout.
+      newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
+        condData: { condType: 'circuit', format: cd.format || '',
+          segments: (cd.segments || []).map(s => ({ label: s.label || '', target: s.target || '', result: '' })) } };
+    } else {
+      newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
+        condData: { modality: cd.modality || '', total: cd.total || '' } };
+    }
   } else {
     const tplExercises = state.currentSession.exercises.map(ex => ({
       name: ex.name, sets: ex.sets.map(s => ({ type: s.type })), notes: ''
@@ -2743,7 +2751,9 @@ async function loadTemplateIntoSession() {
     state.currentSession.runData = Object.assign({}, tpl.runData || {});
     if (!state.currentSession.runData.runType) state.currentSession.runData.runType = 'easy';
   } else if (tpl.type === 'conditioning') {
-    state.currentSession.condData = Object.assign({}, tpl.condData || {});
+    // Deep-copy so editing the loaded session never mutates the saved
+    // template (the segments array would otherwise be shared by reference).
+    state.currentSession.condData = JSON.parse(JSON.stringify(tpl.condData || {}));
   } else {
     state.currentSession.exercises = (tpl.exercises || []).map(ex => ({
       name: ex.name, sets: (ex.sets || []).map(s => ({ type: s.type })), notes: ''
@@ -2865,6 +2875,15 @@ function templateSummaryText(t) {
   }
   if (t.type === 'conditioning') {
     const cd = t.condData || {};
+    if (cd.condType === 'circuit' || (Array.isArray(cd.segments) && cd.segments.length)) {
+      const segs = Array.isArray(cd.segments) ? cd.segments : [];
+      const head = [];
+      if (cd.format) head.push(cd.format);
+      head.push(segs.length + ' segment' + (segs.length === 1 ? '' : 's'));
+      const lines = [head.join(' · ')];
+      segs.forEach(seg => lines.push('• ' + (seg.label || '(segment)') + (seg.target ? ' (' + seg.target + ')' : '')));
+      return lines.join('\n');
+    }
     const bits = [];
     if (cd.modality) bits.push(cd.modality);
     if (cd.total) bits.push('target ' + cd.total);
@@ -2945,9 +2964,59 @@ function templateDraftHtml() {
 }
 
 // =====================================================================
+// BUILT-IN WORKOUT PRESETS (v0.21)
+// Hyrox + common CrossFit WODs as circuit conditioning templates. These
+// live in code (not the DB) so they work offline with no Supabase seeding.
+// Surfaced alongside cloud starter templates; "Add" copies one into your
+// own templates (deep-copied, results blank for you to fill each session).
+// Each preset is the same shape as a saved conditioning template.
+// =====================================================================
+const WORKOUT_PRESETS = [
+  { id: 'builtin-hyrox', name: 'Hyrox', type: 'conditioning', category: 'Hyrox',
+    condData: { condType: 'circuit', format: 'Hyrox', segments: [
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'SkiErg', target: '1000m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Sled push', target: '50m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Sled pull', target: '50m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Burpee broad jumps', target: '80m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Row', target: '1000m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Farmers carry', target: '200m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Sandbag lunges', target: '100m', result: '' },
+      { label: 'Run 1km', target: '1000m', result: '' },
+      { label: 'Wall balls', target: '100 reps', result: '' }
+    ] } },
+  { id: 'builtin-fran', name: 'Fran', type: 'conditioning', category: 'CrossFit',
+    condData: { condType: 'circuit', format: 'For time', segments: [
+      { label: 'Thrusters', target: '21-15-9 @ 95/65 lb', result: '' },
+      { label: 'Pull-ups', target: '21-15-9', result: '' }
+    ] } },
+  { id: 'builtin-murph', name: 'Murph', type: 'conditioning', category: 'CrossFit',
+    condData: { condType: 'circuit', format: 'For time (20 lb vest)', segments: [
+      { label: 'Run', target: '1 mile', result: '' },
+      { label: 'Pull-ups', target: '100', result: '' },
+      { label: 'Push-ups', target: '200', result: '' },
+      { label: 'Air squats', target: '300', result: '' },
+      { label: 'Run', target: '1 mile', result: '' }
+    ] } },
+  { id: 'builtin-cindy', name: 'Cindy', type: 'conditioning', category: 'CrossFit',
+    condData: { condType: 'circuit', format: 'AMRAP 20 min', segments: [
+      { label: 'Pull-ups', target: '5', result: '' },
+      { label: 'Push-ups', target: '10', result: '' },
+      { label: 'Air squats', target: '15', result: '' }
+    ] } }
+];
+
+// =====================================================================
 // STARTER TEMPLATE LIBRARY (v0.15)
 // A read-only Supabase table of preset templates anyone can browse and
 // copy into their own templates. Lazy-loaded on first "Browse".
+// Built-in WORKOUT_PRESETS are shown above the cloud ones.
 // =====================================================================
 let starterTemplates = [];
 let starterLoaded = false;   // did the last fetch succeed?
@@ -2973,33 +3042,44 @@ async function toggleStarterTemplates() {
   renderTemplates();
 }
 function addStarterToMyTemplates(id) {
-  const s = starterTemplates.find(t => t.id === id);
+  // Built-in presets and cloud starters share the same shape; check both.
+  const s = WORKOUT_PRESETS.find(t => t.id === id) || starterTemplates.find(t => t.id === id);
   if (!s) return;
-  const copy = { id: crypto.randomUUID(), name: s.name, type: s.type, exercises: s.exercises || [] };
-  if (s.runData) copy.runData = s.runData;
-  if (s.condData) copy.condData = s.condData;
+  // Deep-copy so the new template can't share array references (e.g. segments)
+  // with the preset or another template.
+  const clone = obj => obj ? JSON.parse(JSON.stringify(obj)) : obj;
+  const copy = { id: crypto.randomUUID(), name: s.name, type: s.type, exercises: clone(s.exercises) || [] };
+  if (s.runData) copy.runData = clone(s.runData);
+  if (s.condData) copy.condData = clone(s.condData);
   state.templates.push(copy);
   saveState();
   cloudPushTemplate(copy);
   showToast('Added "' + s.name + '" to your templates.', 'success');
   renderTemplates();
 }
-function starterSectionHtml() {
-  if (!starterShown) return '';
-  if (!starterLoaded) {
-    return `<div class="card"><p class="muted">Couldn't load starter templates. If you just set this up, make sure the <code>starter_templates</code> table exists in Supabase.</p></div>`;
-  }
-  if (starterTemplates.length === 0) {
-    return `<div class="card"><p class="muted">No starter templates available yet.</p></div>`;
-  }
-  return '<h3 style="margin:6px 0 8px">Starter templates</h3>' + starterTemplates.map(s => `
+// One starter/preset card (used for both built-in presets and cloud starters).
+function starterCardHtml(s) {
+  return `
     <div class="card">
       <div class="header-row" style="margin-bottom:8px">
         <h3>${escapeHtml(s.name)} <span class="tag">${s.type}</span>${s.category ? ` <span class="tag">${escapeHtml(s.category)}</span>` : ''}</h3>
         <button class="btn-small" onclick="addStarterToMyTemplates('${s.id}')">Add</button>
       </div>
       <pre>${escapeHtml(templateSummaryText(s))}</pre>
-    </div>`).join('');
+    </div>`;
+}
+function starterSectionHtml() {
+  if (!starterShown) return '';
+  // Built-in presets always show (work offline). Cloud starters append below.
+  let html = '<h3 style="margin:6px 0 8px">Presets</h3>' + WORKOUT_PRESETS.map(starterCardHtml).join('');
+  if (sb) {
+    if (!starterLoaded) {
+      html += `<div class="card"><p class="muted">Couldn't load cloud starter templates. The built-in presets above still work.</p></div>`;
+    } else if (starterTemplates.length > 0) {
+      html += '<h3 style="margin:14px 0 8px">More from the cloud</h3>' + starterTemplates.map(starterCardHtml).join('');
+    }
+  }
+  return html;
 }
 
 function renderTemplates() {
