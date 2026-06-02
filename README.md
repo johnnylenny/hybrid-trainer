@@ -39,6 +39,11 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Local-only mode: continue without an account, keep all data on your device
 - Sync indicator in the header tells you when changes are pushed to the cloud
 
+**Profile** (new in v0.11)
+- Display name and avatar picker (5 emoji presets)
+- Shown in the header when signed in
+- Stored in the cloud, syncs across devices
+
 **Everywhere**
 - Save exercise lists as reusable templates
 - Edit any saved session (tap it in History)
@@ -51,7 +56,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 ## Status
 
-v0.10 — daily-driver prototype with cloud sync. Works on phone and laptop, signed in or local-only.
+v0.11 — daily-driver prototype with cloud sync and user profiles. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -82,7 +87,6 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 ## Roadmap
 
 **Near-term:**
-- User profile (name, avatar)
 - Conditioning field cleanup (per-modality fields)
 - Polish: retry logic for failed cloud writes, conflict resolution
 

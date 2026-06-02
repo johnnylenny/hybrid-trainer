@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 8
+## Current schema version: 9
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -28,7 +28,7 @@ The two layers use the same JS object shapes. The conversion to/from the Supabas
 
 ```json
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "exportedAt": "2026-05-24T18:41:00.000Z",
   "settings": { ... },
   "templates": [ ... ],
@@ -215,7 +215,9 @@ Templates only store exercise names and set types. They never store weights or r
   "units": "lb",
   "distanceUnit": "mi",
   "intensity": "rpe",
-  "defaultPhase": ""
+  "defaultPhase": "",
+  "displayName": "",
+  "avatar": ""
 }
 ```
 
@@ -227,6 +229,8 @@ Templates only store exercise names and set types. They never store weights or r
 | `distanceUnit` | string | `mi`, `km` (label only; pace pairs automatically) |
 | `intensity` | string | `off`, `rpe`, `rir` |
 | `defaultPhase` | string | Free text. |
+| `displayName` | string | Free text shown in header instead of email. Empty = fall back to email. Added in v9. Only meaningful in cloud-sync mode. |
+| `avatar` | string | One of: `lifter`, `runner`, `strong`, `fire`, `bolt`, or empty. Maps to an emoji in the UI. Added in v9. |
 
 ## Cloud database schema (Supabase)
 
@@ -281,6 +285,8 @@ One row per user. Primary key is `user_id` (not a separate id), so there's at mo
 | `distance_unit` | text | `distanceUnit` |
 | `intensity` | text | `intensity` |
 | `default_phase` | text | `defaultPhase` |
+| `display_name` | text | `displayName` (added in v9) |
+| `avatar` | text | `avatar` (added in v9) |
 | `updated_at` | timestamptz | — |
 
 ### Row Level Security
@@ -321,7 +327,8 @@ Other notes:
 
 ## Schema version history
 
-- **v8** (current) — Added stable UUID `id` field to sessions and templates to support cloud sync. Added cloud database schema (Supabase tables: `sessions`, `templates`, `user_settings`) with Row Level Security. Local ↔ cloud field name mapping documented. Backwards compatible: old data without `id` gets one assigned on first cloud upload.
+- **v9** (current) — Added `displayName` and `avatar` fields to settings (and corresponding `display_name`, `avatar` columns to the cloud `user_settings` table). Both are optional; empty values fall back to email/no avatar. Backwards compatible: old exports/imports without these fields just leave them empty.
+- **v8** — Added stable UUID `id` field to sessions and templates to support cloud sync. Added cloud database schema (Supabase tables: `sessions`, `templates`, `user_settings`) with Row Level Security. Local ↔ cloud field name mapping documented. Backwards compatible: old data without `id` gets one assigned on first cloud upload.
 - **v7** — Added optional `endDate` field for sessions crossing midnight. Added `distanceUnit` setting (mi/km) affecting run field labels and pace. Added inline format validation (visual red-border only, never blocks saving) and pre-save warnings for missing or inconsistent data. Backwards compatible: sessions without `endDate` are treated as same-day.
 - **v6** — Cleaned up phantom defaults: `runData` and `condData` are now only populated for sessions whose `type` matches. Added session-type-switch guard in the UI to warn before hiding data. Backwards compatible: old files with phantom defaults still import fine.
 - **v5** — Added `runType` field to run sessions with five types (easy, tempo, intervals, long, race), each with their own field set. Backwards compatible with v4: old runs without `runType` are treated as easy.

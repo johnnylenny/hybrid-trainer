@@ -1,28 +1,24 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.10 — cloud sync
+  HYBRID TRAINER v0.11 — user profile (name + avatar)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
-  What's new vs v0.9.1:
-    - Three app modes: 'cloud' (signed in, syncing), 'local' (chose to skip
-      sign-in), 'unauthenticated' (showing sign-in card)
-    - "Continue without an account" option on sign-in card → stays in local mode
-    - Sync indicator in header: Synced / Syncing / Sync error / Local only
-    - On sign-in, four scenarios are handled:
-        * cloud empty + local empty → nothing
-        * cloud empty + local data → prompt to upload
-        * cloud data + local empty → pull
-        * cloud data + local data → prompt to choose
-    - Every session/template/settings change pushes to cloud in background
-    - On sign-out, local cache is wiped (so the next signed-in user can't see it)
-    - "Delete all local data" warns it's only local (cloud account untouched)
-    - sessionToRow / rowToSession etc. convert between local JS and DB shapes
+  What's new vs v0.10:
+    - Display name field in Settings (cloud-only). Shown in header instead
+      of email when set, falls back to email.
+    - Avatar picker: 5 emoji presets (lifter, runner, strong, fire, bolt).
+      Stored as a short key, rendered as the emoji.
+    - Profile card in Settings only shows when signed in (local-only users
+      have no need for it).
+    - Adds display_name + avatar columns to user_settings table (one-time SQL
+      migration the user runs in Supabase).
 
-  Schema:
-    - Supabase tables: sessions, templates, user_settings (created in v0.9 setup)
-    - Local: localStorage as cache (same key as before)
-    - All sessions/templates now carry a uuid `id` so cloud upserts work
-  Auth: Supabase Email provider with magic link fallback (same as v0.9).
+  Requires SQL migration:
+    alter table public.user_settings
+      add column if not exists display_name text,
+      add column if not exists avatar text;
+
+  Schema bumped to v9 (additive only; old exports import fine).
 -->
 <html lang="en">
 <head>
@@ -401,6 +397,28 @@
   }
   .signin-skip-note { color: var(--text-dim); font-size: 0.72rem; margin-top: 4px; }
 
+  /* Avatar picker */
+  .avatar-picker { display: flex; gap: 8px; flex-wrap: wrap; }
+  .avatar-option {
+    width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem;
+    background: var(--surface-2);
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+    user-select: none;
+  }
+  .avatar-option:hover { border-color: var(--text-muted); }
+  .avatar-option.selected { border-color: var(--accent); transform: scale(1.05); }
+  .avatar-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px;
+    font-size: 0.95rem;
+    margin-right: 4px;
+  }
+
   /* Sync indicator in header */
   .sync-indicator {
     display: inline-flex;
@@ -493,10 +511,11 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.10</small>
+      <small>v0.11</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
+      <span id="auth-avatar" class="avatar-badge" style="display:none"></span>
       <span id="auth-email"></span>
       <button onclick="handleSignOut()">Sign out</button>
     </div>
@@ -653,6 +672,29 @@
 
 <section id="screen-settings" class="screen">
   <h2>Settings</h2>
+
+  <div class="card" id="profile-card" style="display:none">
+    <h3 style="margin:0 0 12px 0; text-transform:none; letter-spacing:0; font-size:1rem; font-weight:600;">Profile</h3>
+    <div class="setting-row" style="align-items:flex-start">
+      <div class="setting-label">
+        <div class="title">Display name</div>
+        <div class="desc">Shown in the header. Optional — falls back to your email.</div>
+      </div>
+      <div class="setting-control" style="max-width:none">
+        <input type="text" id="set-displayname" placeholder="Your name" onblur="updateSetting('displayName', this.value); updateAuthBadge();" maxlength="40">
+      </div>
+    </div>
+    <div class="setting-row" style="align-items:flex-start">
+      <div class="setting-label">
+        <div class="title">Avatar</div>
+        <div class="desc">Pick a vibe.</div>
+      </div>
+      <div class="setting-control" style="max-width:none">
+        <div class="avatar-picker" id="avatar-picker"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="setting-row">
       <div class="setting-label">
@@ -748,7 +790,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.10 · cloud sync web app · data lives in this browser's localStorage</small>
+    <small>v0.11 · cloud sync + profile web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -779,7 +821,7 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -790,6 +832,20 @@ const SETTINGS_KEY = 'hybridTrainerSettings';
 // =====================================================================
 const SUPABASE_URL = 'https://rrrfmudypfhywiremudw.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_QHSZn7O0nzFYayLgRI9nKA_b-hASuQW';
+
+// Avatar presets. Stored as a short key (e.g. 'lifter'), displayed as the emoji.
+// Adding a new one here automatically makes it available in the picker.
+const AVATAR_OPTIONS = [
+  { key: 'lifter', emoji: '🏋️' },
+  { key: 'runner', emoji: '🏃' },
+  { key: 'strong', emoji: '💪' },
+  { key: 'fire',   emoji: '🔥' },
+  { key: 'bolt',   emoji: '⚡' }
+];
+function avatarEmoji(key) {
+  const found = AVATAR_OPTIONS.find(a => a.key === key);
+  return found ? found.emoji : '';
+}
 
 let sb = null;
 let currentUser = null;
@@ -840,6 +896,25 @@ async function checkAuth() {
   });
 }
 
+// Updates the header badge to reflect current name + avatar.
+// Called on sign-in, and any time the user changes profile fields.
+function updateAuthBadge() {
+  const badge = document.getElementById('auth-badge');
+  if (!badge || !currentUser) return;
+  const emailEl = document.getElementById('auth-email');
+  const avatarEl = document.getElementById('auth-avatar');
+  // Display name if set, otherwise email
+  emailEl.textContent = settings.displayName || currentUser.email || 'signed in';
+  // Avatar emoji if set
+  const emoji = avatarEmoji(settings.avatar);
+  if (emoji) {
+    avatarEl.textContent = emoji;
+    avatarEl.style.display = 'inline-flex';
+  } else {
+    avatarEl.style.display = 'none';
+  }
+}
+
 function showSignInOverlay() {
   document.getElementById('signin-overlay').style.display = 'flex';
   document.getElementById('auth-badge').style.display = 'none';
@@ -855,7 +930,7 @@ function showSignInOverlay() {
 async function onSignedIn() {
   document.getElementById('signin-overlay').style.display = 'none';
   document.getElementById('auth-badge').style.display = 'inline-flex';
-  document.getElementById('auth-email').textContent = currentUser.email || 'signed in';
+  updateAuthBadge();
   const card = document.getElementById('delete-account-card');
   if (card) card.style.display = 'block';
 
@@ -901,6 +976,7 @@ async function onSignedIn() {
     // Pull cloud into local
     const r = await cloudPullAll();
     if (!r.success) { alert('Failed to load your cloud data: ' + r.error); }
+    updateAuthBadge();
     renderLog();
     return;
   }
@@ -931,6 +1007,7 @@ async function onSignedIn() {
     const r = await cloudPullAll();
     if (!r.success) alert('Failed to load cloud data: ' + r.error);
   }
+  updateAuthBadge();
   renderLog();
 }
 
@@ -1240,7 +1317,8 @@ let state = {
 };
 let settings = {
   theme: 'auto', timeFormat: '24', units: 'lb', intensity: 'rpe',
-  defaultPhase: '', distanceUnit: 'mi'
+  defaultPhase: '', distanceUnit: 'mi',
+  displayName: '', avatar: ''
 };
 
 function emptySession() {
@@ -1379,6 +1457,8 @@ function settingsToRow(s, userId) {
     distance_unit: s.distanceUnit,
     intensity: s.intensity,
     default_phase: s.defaultPhase || '',
+    display_name: s.displayName || '',
+    avatar: s.avatar || '',
     updated_at: new Date().toISOString()
   };
 }
@@ -1389,7 +1469,9 @@ function rowToSettings(row) {
     units: row.units || 'lb',
     distanceUnit: row.distance_unit || 'mi',
     intensity: row.intensity || 'rpe',
-    defaultPhase: row.default_phase || ''
+    defaultPhase: row.default_phase || '',
+    displayName: row.display_name || '',
+    avatar: row.avatar || ''
   };
 }
 
@@ -2739,6 +2821,35 @@ function renderSettings() {
   document.getElementById('set-distanceunit').value = settings.distanceUnit || 'mi';
   document.getElementById('set-intensity').value = settings.intensity;
   document.getElementById('set-defaultphase').value = settings.defaultPhase || '';
+  // Profile card: only show when signed in (profile only matters in cloud mode)
+  const profileCard = document.getElementById('profile-card');
+  if (profileCard) {
+    profileCard.style.display = (appMode === 'cloud') ? 'block' : 'none';
+  }
+  const nameInput = document.getElementById('set-displayname');
+  if (nameInput) nameInput.value = settings.displayName || '';
+  renderAvatarPicker();
+}
+
+// Build the 5 avatar option buttons. Clicking one updates settings and refreshes header.
+function renderAvatarPicker() {
+  const wrap = document.getElementById('avatar-picker');
+  if (!wrap) return;
+  wrap.innerHTML = AVATAR_OPTIONS.map(opt => `
+    <div class="avatar-option ${opt.key === settings.avatar ? 'selected' : ''}"
+         data-avatar="${opt.key}"
+         onclick="pickAvatar('${opt.key}')"
+         title="${opt.key}">${opt.emoji}</div>
+  `).join('');
+}
+function pickAvatar(key) {
+  // Toggle off if clicking the already-selected one
+  if (settings.avatar === key) settings.avatar = '';
+  else settings.avatar = key;
+  saveSettings();
+  cloudPushSettings();
+  renderAvatarPicker();
+  updateAuthBadge();
 }
 function updateSetting(key, value) {
   settings[key] = value;
