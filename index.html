@@ -1,7 +1,14 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.22.0 — build any conditioning type as a template
+  HYBRID TRAINER v0.23.0 — in-progress workout survives app reopen
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.23.0:
+    - Bug fix: an in-progress workout is no longer wiped when you close and
+      reopen the app. cloudPullAll runs on every reopen (boot re-auth) and used
+      to reset currentSession to blank, overwriting the localStorage cache. It
+      now preserves a draft that has content (or is an edit-in-progress) and
+      re-resolves the edit index against the freshly pulled history by id.
 
   What's new vs v0.18.1:
     - Conditioning is now type-based like runs. COND_TYPES: Erg (Row/Bike/Ski),
@@ -632,7 +639,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.22.0</small>
+      <small>v0.23.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -912,7 +919,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.22.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.23.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -943,7 +950,11 @@
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SCHEMA_VERSION = 13;
+// 14 = the segment/Hyrox cond_data shape (added in v0.20.0). The constant was
+// left at 13 by mistake when that shipped; SCHEMA.md already documents v14 as
+// current, so this just aligns the code with the docs. Only labels backups —
+// no migration is gated on it. (Bumped here in app v0.23.0.)
+const SCHEMA_VERSION = 14;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1742,7 +1753,24 @@ async function cloudPullAll() {
     if (settingsRow.data) {
       Object.assign(settings, rowToSettings(settingsRow.data));
     }
-    state.currentSession = emptySession();
+    // Preserve an in-progress workout. cloudPullAll runs on EVERY reopen
+    // (boot re-auth -> checkAuth -> onSignedIn -> here), so blindly resetting
+    // to a blank session would wipe whatever the user is mid-logging. Keep the
+    // draft if it has real content or is an edit-in-progress; otherwise start
+    // fresh. When editing, re-resolve the index against the freshly pulled
+    // history by id so we don't write back over the wrong row.
+    const draft = state.currentSession;
+    const wasEditing = state.editingHistoryIndex !== null;
+    const editId = wasEditing && draft ? draft.id : null;
+    if (sessionHasContent() || wasEditing) {
+      state.currentSession = draft;
+      if (wasEditing) {
+        const idx = state.history.findIndex(h => h.id === editId);
+        state.editingHistoryIndex = idx >= 0 ? idx : null;
+      }
+    } else {
+      state.currentSession = emptySession();
+    }
     saveState(); // cache locally
     saveSettings();
     setSyncStatus('idle');
