@@ -1,7 +1,26 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.23.0 — in-progress workout survives app reopen
+  HYBRID TRAINER v0.24.0 — Finish & Save flow, run templates, history tools
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.24.0:
+    - "Finish & Save" end-time flow for live lifts/conditioning. The Save button
+      opens an "End workout & save" modal with three explicit outcomes so a time
+      is never forced: Cancel, "Save without end time" (for backdated notebook
+      entries), and Save (uses the time field). The field defaults to now, but if
+      you already entered an end time it pre-fills with that and Save keeps it
+      (never auto-overwritten). Quick chips (Now / -5m / -10m / -15m) adjust it.
+      Runs and edit-mode save directly. endTimeAndSaveModal / finishAndSave /
+      updateSaveButtonLabel.
+    - Run templates are now config-driven over RUN_TYPES (like conditioning was
+      since v0.22.0): pick any run type (easy/tempo/intervals/long/race) and the
+      builder renders that type's real fields, with a reps x distance @ goal +
+      recovery interval-set editor for the intervals type. saveTemplateDraft /
+      syncTemplateDraftFromDOM / templateSummaryText handle all types; loading a
+      run template deep-copies runData (fixes a shared intervalSets array ref).
+    - Import / Export buttons added to the History tab (same exportData /
+      importData used in Settings).
+    No schema change — endTime and run_data (jsonb) already existed.
 
   What's new in v0.23.0:
     - Bug fix: an in-progress workout is no longer wiped when you close and
@@ -639,7 +658,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.23.0</small>
+      <small>v0.24.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -727,7 +746,7 @@
       <textarea id="session-notes" placeholder="Anything to remember"></textarea>
     </div>
     <div class="btn-group">
-      <button class="btn" onclick="saveSessionToHistory()" id="save-btn">Save Session</button>
+      <button class="btn" onclick="finishAndSave()" id="save-btn">Save Session</button>
       <button class="btn-secondary" onclick="saveCurrentAsTemplate()">Save as Template</button>
       <button class="btn-secondary" onclick="clearSession()">Clear</button>
     </div>
@@ -744,6 +763,10 @@
 
 <section id="screen-history" class="screen">
   <h2>History</h2>
+  <div class="btn-group" style="margin-bottom:12px">
+    <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
+    <button class="btn-secondary" onclick="importData()">Import from file</button>
+  </div>
   <div class="card compact">
     <div class="row">
       <div class="field">
@@ -919,7 +942,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.23.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.24.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1993,7 +2016,7 @@ function renderLog() {
 
   const editing = state.editingHistoryIndex !== null;
   document.getElementById('edit-banner').style.display = editing ? 'flex' : 'none';
-  document.getElementById('save-btn').textContent = editing ? 'Save Changes' : 'Save Session';
+  updateSaveButtonLabel();
 
   onSessionTypeChange();
   updateFabVisibility();
@@ -2123,7 +2146,18 @@ function onSessionTypeChange() {
   else if (type === 'run') { renderRunForm(); }
   else if (type === 'conditioning') { renderCondForm(); }
   updateFabVisibility();
+  updateSaveButtonLabel();
   saveState();
+}
+// The save button doubles as a "finish" action for live lifts/conditioning
+// sessions (it opens the end-time modal). Runs and edit-mode skip that, so the
+// label reflects what tapping it will actually do.
+function updateSaveButtonLabel() {
+  const btn = document.getElementById('save-btn');
+  if (!btn) return;
+  if (state.editingHistoryIndex !== null) { btn.textContent = 'Save Changes'; return; }
+  const t = state.currentSession.type;
+  btn.textContent = (t === 'lifts' || t === 'conditioning') ? 'Finish & Save' : 'Save Session';
 }
 
 // =====================================================================
@@ -2782,7 +2816,9 @@ async function loadTemplateIntoSession() {
   state.currentSession.runData = {};
   state.currentSession.condData = {};
   if (tpl.type === 'run') {
-    state.currentSession.runData = Object.assign({}, tpl.runData || {});
+    // Deep-copy so editing the loaded session never mutates the saved template
+    // (intervalSets would otherwise be shared by reference, like cond segments).
+    state.currentSession.runData = JSON.parse(JSON.stringify(tpl.runData || {}));
     if (!state.currentSession.runData.runType) state.currentSession.runData.runType = 'easy';
   } else if (tpl.type === 'conditioning') {
     // Deep-copy so editing the loaded session never mutates the saved
@@ -2802,7 +2838,9 @@ async function loadTemplateIntoSession() {
 // IN-TAB TEMPLATE BUILDER (v0.13 lifts-only; v0.14 adds run/conditioning)
 // templateDraft holds the template being built. null = not building.
 // Shape: { name, type, exercises:[{name,sets:[{type}]}],
-//          runData:{runType,distance,pace}, condData:{modality,total} }
+//          runData:{runType, ...type-specific fields, intervalSets:[...]},
+//          condData:{condType, ...type-specific fields, segments:[...]} }
+//          (run + cond are config-driven over RUN_TYPES / COND_TYPES) }
 // =====================================================================
 let templateDraft = null;
 const SET_TYPE_LABEL = { warmup: 'Warmup', working: 'Set', myorep: 'Myo', drop: 'Drop' };
@@ -2834,9 +2872,27 @@ function syncTemplateDraftFromDOM() {
     const exEl = document.getElementById('tpl-draft-ex-' + i);
     if (exEl) ex.name = exEl.value;
   });
-  const rt = document.getElementById('tpl-draft-runtype'); if (rt) templateDraft.runData.runType = rt.value;
-  const di = document.getElementById('tpl-draft-distance'); if (di) templateDraft.runData.distance = di.value;
-  const pa = document.getElementById('tpl-draft-pace'); if (pa) templateDraft.runData.pace = pa.value;
+  // Run is config-driven over RUN_TYPES (same approach as conditioning): read
+  // the chosen type's fields by their generated ids, plus interval sets for the
+  // intervals type.
+  const rtEl = document.getElementById('tpl-draft-runtype');
+  if (rtEl) {
+    if (!templateDraft.runData) templateDraft.runData = {};
+    templateDraft.runData.runType = rtEl.value;
+    const rTypeDef = RUN_TYPES[rtEl.value] || RUN_TYPES.easy;
+    rTypeDef.fields.forEach(f => {
+      const el = document.getElementById('tpl-draft-rf-' + f.key);
+      if (el) templateDraft.runData[f.key] = el.value;
+    });
+    if (rTypeDef.hasIntervalSets && Array.isArray(templateDraft.runData.intervalSets)) {
+      templateDraft.runData.intervalSets.forEach((set, i) => {
+        ['reps', 'distance', 'goal', 'recovery'].forEach(k => {
+          const el = document.getElementById('tpl-draft-iset-' + i + '-' + k);
+          if (el) set[k] = el.value;
+        });
+      });
+    }
+  }
   // Conditioning is config-driven: read the chosen type's fields (and circuit
   // segments) by their generated ids, so every COND_TYPES type is supported.
   const ctEl = document.getElementById('tpl-draft-condtype');
@@ -2880,6 +2936,29 @@ function templateDraftRemoveSegment(i) {
   if (Array.isArray(templateDraft.condData.segments)) templateDraft.condData.segments.splice(i, 1);
   renderTemplates();
 }
+// Switch the run sub-type in the builder. Seed one empty interval set when
+// moving to an interval-based type so there's a row to fill. Mirrors
+// templateDraftSetCondType.
+function templateDraftSetRunType(newType) {
+  syncTemplateDraftFromDOM();
+  if (!templateDraft.runData) templateDraft.runData = {};
+  templateDraft.runData.runType = newType;
+  if ((RUN_TYPES[newType] || {}).hasIntervalSets && !Array.isArray(templateDraft.runData.intervalSets)) {
+    templateDraft.runData.intervalSets = [{ reps: '', distance: '', goal: '', recovery: '' }];
+  }
+  renderTemplates();
+}
+function templateDraftAddIntervalSet() {
+  syncTemplateDraftFromDOM();
+  if (!Array.isArray(templateDraft.runData.intervalSets)) templateDraft.runData.intervalSets = [];
+  templateDraft.runData.intervalSets.push({ reps: '', distance: '', goal: '', recovery: '' });
+  renderTemplates();
+}
+function templateDraftRemoveIntervalSet(i) {
+  syncTemplateDraftFromDOM();
+  if (Array.isArray(templateDraft.runData.intervalSets)) templateDraft.runData.intervalSets.splice(i, 1);
+  renderTemplates();
+}
 function templateDraftSetType(type) {
   syncTemplateDraftFromDOM();
   templateDraft.type = type;
@@ -2914,11 +2993,24 @@ function saveTemplateDraft() {
   const id = crypto.randomUUID();
   let newTemplate;
   if (templateDraft.type === 'run') {
-    newTemplate = { id, name, type: 'run', exercises: [], runData: {
-      runType: templateDraft.runData.runType || 'easy',
-      distance: (templateDraft.runData.distance || '').trim(),
-      pace: (templateDraft.runData.pace || '').trim()
-    } };
+    const rd = templateDraft.runData || {};
+    const runType = rd.runType || 'easy';
+    const rTypeDef = RUN_TYPES[runType] || RUN_TYPES.easy;
+    const out = { runType };
+    // Keep only the fields the user actually filled (templates are skeletons).
+    rTypeDef.fields.forEach(f => {
+      const v = (rd[f.key] || '').trim();
+      if (v) out[f.key] = v;
+    });
+    if (rTypeDef.hasIntervalSets) {
+      const sets = (rd.intervalSets || [])
+        .map(s => ({ reps: (s.reps || '').trim(), distance: (s.distance || '').trim(), goal: (s.goal || '').trim(), recovery: (s.recovery || '').trim() }))
+        .filter(s => s.reps || s.distance || s.goal || s.recovery);
+      if (sets.length) out.intervalSets = sets;
+    }
+    // A run template can legitimately be just a type (e.g. "Easy run") with no
+    // targets, so unlike conditioning we don't require any field to be filled.
+    newTemplate = { id, name, type: 'run', exercises: [], runData: out };
   } else if (templateDraft.type === 'conditioning') {
     const cd = templateDraft.condData || {};
     const condType = cd.condType || 'other';
@@ -2955,7 +3047,28 @@ function saveTemplateDraft() {
 function templateSummaryText(t) {
   if (t.type === 'run') {
     const rd = t.runData || {};
-    const bits = [(RUN_TYPES[rd.runType] || {}).name || rd.runType || 'Run'];
+    const typeDef = RUN_TYPES[rd.runType];
+    if (typeDef && typeDef.hasIntervalSets && Array.isArray(rd.intervalSets) && rd.intervalSets.length) {
+      const lines = [typeDef.name + ' · ' + rd.intervalSets.length + ' set' + (rd.intervalSets.length === 1 ? '' : 's')];
+      rd.intervalSets.forEach(s => {
+        const parts = [];
+        if (s.reps) parts.push(s.reps + 'x');
+        if (s.distance) parts.push(s.distance);
+        if (s.goal) parts.push('@ ' + s.goal);
+        if (s.recovery) parts.push('/ ' + s.recovery);
+        lines.push('• ' + (parts.join(' ') || '(set)'));
+      });
+      return lines.join('\n');
+    }
+    if (typeDef) {
+      const bits = [typeDef.name];
+      typeDef.fields
+        .filter(f => f.key !== 'notes' && rd[f.key])
+        .forEach(f => bits.push(`${f.label}: ${rd[f.key]}`));
+      return bits.join(' · ');
+    }
+    // Unknown/legacy run type — fall back to the old distance/pace summary.
+    const bits = [rd.runType || 'Run'];
     if (rd.distance) bits.push('target ' + rd.distance);
     if (rd.pace) bits.push('@ ' + rd.pace);
     return bits.join(' · ');
@@ -2991,15 +3104,17 @@ function templateDraftBodyHtml() {
   const type = templateDraft.type;
   if (type === 'run') {
     const rd = templateDraft.runData || {};
+    const runType = rd.runType || 'easy';
+    const typeDef = RUN_TYPES[runType] || RUN_TYPES.easy;
     const opts = Object.keys(RUN_TYPES).map(k =>
-      `<option value="${k}" ${rd.runType === k ? 'selected' : ''}>${escapeHtml(RUN_TYPES[k].name)}</option>`).join('');
+      `<option value="${k}" ${runType === k ? 'selected' : ''}>${escapeHtml(RUN_TYPES[k].name)}</option>`).join('');
+    const intervalsHtml = typeDef.hasIntervalSets ? templateDraftRunIntervalsHtml(rd) : '';
+    const fieldsHtml = typeDef.fields.map(f => templateDraftRunFieldHtml(f, rd)).join('');
     return `
-      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">Pre-set the run type and optional targets. You fill the real numbers each session.</p>
-      <div class="field"><label>Run type</label><select id="tpl-draft-runtype">${opts}</select></div>
-      <div class="row">
-        <div class="field"><label>Target distance</label><input type="text" id="tpl-draft-distance" placeholder="5" value="${escapeHtml(rd.distance || '')}"></div>
-        <div class="field"><label>Target pace</label><input type="text" id="tpl-draft-pace" placeholder="4:30" value="${escapeHtml(rd.pace || '')}"></div>
-      </div>`;
+      <p class="muted" style="font-size:0.8rem; margin:4px 0 10px">Pick the run type, then pre-set any target values. You fill the rest each session.</p>
+      <div class="field"><label>Run type</label><select id="tpl-draft-runtype" onchange="templateDraftSetRunType(this.value)">${opts}</select></div>
+      ${intervalsHtml}
+      ${fieldsHtml}`;
   }
   if (type === 'conditioning') {
     const cd = templateDraft.condData || {};
@@ -3073,6 +3188,48 @@ function templateDraftSegmentsHtml(cd) {
       <label style="display:block; margin-bottom:8px">Segments</label>
       ${rows || '<div class="muted" style="font-size:0.85rem; margin-bottom:8px">No segments yet. Add one below.</div>'}
       <button class="btn-secondary" style="width:100%" onclick="templateDraftAddSegment()">+ Add segment</button>
+    </div>`;
+}
+// One run field input for the template builder (mirrors the conditioning
+// version). Ids are namespaced tpl-draft-rf-<key>.
+function templateDraftRunFieldHtml(field, rd) {
+  const value = escapeHtml(rd[field.key] || '');
+  const label = escapeHtml(field.label);
+  const placeholder = escapeHtml(field.placeholder || '');
+  const id = 'tpl-draft-rf-' + field.key;
+  if (field.type === 'textarea') {
+    return `<div class="field"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}">${value}</textarea></div>`;
+  }
+  if (field.type === 'number') {
+    return `<div class="field"><label>${label}</label><input type="number" inputmode="numeric" id="${id}" placeholder="${placeholder}" value="${value}"></div>`;
+  }
+  return `<div class="field"><label>${label}</label><input type="text" id="${id}" placeholder="${placeholder}" value="${value}"></div>`;
+}
+// Interval-set editor for "intervals" run templates: reps x distance @ goal +
+// recovery (the plan; splits are filled per session). Stored in
+// templateDraft.runData.intervalSets. Mirrors the circuit segment editor.
+function templateDraftRunIntervalsHtml(rd) {
+  const sets = Array.isArray(rd.intervalSets) ? rd.intervalSets : [];
+  const rows = sets.map((set, i) => `
+    <div class="card compact" style="margin-bottom:8px">
+      <div class="header-row" style="margin-bottom:6px">
+        <strong>${i + 1}</strong>
+        <button class="btn-small" onclick="templateDraftRemoveIntervalSet(${i})" title="Remove set">&times;</button>
+      </div>
+      <div class="row">
+        <div class="field"><label>Reps</label><input type="text" inputmode="numeric" id="tpl-draft-iset-${i}-reps" value="${escapeHtml(set.reps || '')}" placeholder="5"></div>
+        <div class="field"><label>Distance</label><input type="text" id="tpl-draft-iset-${i}-distance" value="${escapeHtml(set.distance || '')}" placeholder="400m"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Goal time</label><input type="text" id="tpl-draft-iset-${i}-goal" value="${escapeHtml(set.goal || '')}" placeholder="1:30"></div>
+        <div class="field"><label>Recovery</label><input type="text" id="tpl-draft-iset-${i}-recovery" value="${escapeHtml(set.recovery || '')}" placeholder="90s jog"></div>
+      </div>
+    </div>`).join('');
+  return `
+    <div style="margin-bottom:14px">
+      <label style="display:block; margin-bottom:8px">Interval sets</label>
+      ${rows || '<div class="muted" style="font-size:0.85rem; margin-bottom:8px">No sets yet. Add one below.</div>'}
+      <button class="btn-secondary" style="width:100%" onclick="templateDraftAddIntervalSet()">+ Add interval set</button>
     </div>`;
 }
 function templateDraftHtml() {
@@ -3263,7 +3420,89 @@ async function deleteTemplate(i) {
   renderTemplates();
 }
 
-async function saveSessionToHistory() {
+// Finish-and-save modal for lifts/conditioning. Gives three explicit outcomes
+// so a time is never forced on you:
+//   - Cancel              -> resolves null (don't save)
+//   - Save without end time -> resolves { skip: true } (store no end time)
+//   - Save                -> resolves { time: "HH:MM" } (use the field value)
+// "What shows up" adapts: if you already entered an end time, the field
+// pre-fills with it and Save keeps it (never auto-overwritten with now). If you
+// hadn't, it defaults to now. The quick chips only change it if you tap them.
+// Values use the 24h HH:MM format <input type="time"> expects, regardless of
+// the display time-format setting.
+function endTimeAndSaveModal(initial) {
+  return new Promise((resolve) => {
+    const pad = n => String(n).padStart(2, '0');
+    const fmt = d => pad(d.getHours()) + ':' + pad(d.getMinutes());
+    const hadExisting = !!initial;
+    const startVal = initial || fmt(new Date());
+    const message = hadExisting
+      ? 'You already set an end time of ' + initial + '. Keep it, change it, or save with no end time.'
+      : 'When did you finish? Defaults to now — or save without an end time (handy for logging old workouts).';
+
+    const o = document.createElement('div');
+    o.className = 'modal-overlay';
+    o.style.display = 'flex';
+    o.innerHTML =
+      '<div class="modal-box" role="dialog" aria-modal="true">' +
+        '<h3 class="modal-title">End workout & save</h3>' +
+        '<p class="modal-message">' + message + '</p>' +
+        '<input id="endtime-input" class="modal-input" type="time" value="' + startVal + '">' +
+        '<div class="endtime-chips" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">' +
+          '<button type="button" class="btn-small" data-off="0">Now</button>' +
+          '<button type="button" class="btn-small" data-off="5">-5m</button>' +
+          '<button type="button" class="btn-small" data-off="10">-10m</button>' +
+          '<button type="button" class="btn-small" data-off="15">-15m</button>' +
+        '</div>' +
+        '<div class="modal-buttons">' +
+          '<button type="button" class="modal-btn secondary" data-act="cancel">Cancel</button>' +
+          '<button type="button" class="modal-btn secondary" data-act="skip">Save without end time</button>' +
+          '<button type="button" class="modal-btn primary" data-act="save">Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(o);
+    const inp = o.querySelector('#endtime-input');
+
+    function cleanup() { document.removeEventListener('keydown', keyHandler); o.remove(); }
+    function settle(val) { cleanup(); resolve(val); }
+    function keyHandler(e) {
+      if (e.key === 'Escape') { e.preventDefault(); settle(null); }
+      else if (e.key === 'Enter') { e.preventDefault(); settle({ time: inp.value }); }
+    }
+    // Each chip sets the field to the current time minus its offset (computed
+    // fresh on tap, so it's always relative to real "now").
+    o.querySelectorAll('.endtime-chips .btn-small').forEach(btn => {
+      btn.onclick = () => { inp.value = fmt(new Date(Date.now() - Number(btn.dataset.off) * 60000)); };
+    });
+    o.querySelector('[data-act="cancel"]').onclick = () => settle(null);
+    o.querySelector('[data-act="skip"]').onclick = () => settle({ skip: true });
+    o.querySelector('[data-act="save"]').onclick = () => settle({ time: inp.value });
+    o.addEventListener('mousedown', e => { if (e.target === o) settle(null); });
+    document.addEventListener('keydown', keyHandler);
+  });
+}
+
+// The Save button's entry point. For a live lifts/conditioning session it first
+// opens the end-time modal (the "finish" moment); runs (no start/end time) and
+// edit-mode (a correction, not a live finish) go straight to the normal save.
+async function finishAndSave() {
+  const s = state.currentSession;
+  const isEditing = state.editingHistoryIndex !== null;
+  if (!isEditing && (s.type === 'lifts' || s.type === 'conditioning')) {
+    const r = await endTimeAndSaveModal(s.endTime || '');
+    if (r === null) return;                 // cancelled — don't save
+    s.endTime = r.skip ? '' : (r.time || ''); // skip -> no end time; else field value
+    const endField = document.getElementById('session-end');
+    if (endField) endField.value = s.endTime;
+    saveState();
+    await saveSessionToHistory({ endTimeHandled: true });
+    return;
+  }
+  saveSessionToHistory();
+}
+
+async function saveSessionToHistory(opts) {
+  opts = opts || {};
   const s = state.currentSession;
 
   // ---- BLOCKERS: nothing actually blocks, but these are first-line confirms ----
@@ -3274,10 +3513,11 @@ async function saveSessionToHistory() {
   // ---- Build a list of warnings, show them all at once ----
   const warnings = [];
 
-  // Missing common fields
+  // Missing common fields. When the end time was just handled by the finish
+  // modal (incl. a deliberate "save without end time"), don't nag about it.
   if (s.type === 'lifts') {
     if (!s.bodyweight) warnings.push('No bodyweight logged');
-    if (!s.endTime) warnings.push('No end time logged');
+    if (!s.endTime && !opts.endTimeHandled) warnings.push('No end time logged');
   }
   if (s.type === 'run') {
     const rd = s.runData || {};
