@@ -50,7 +50,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Stored in the cloud, syncs across devices
 
 **Everywhere**
-- Reusable templates for all three session types: lifts (exercise lists), run (run type + target distance/pace), and conditioning (any type's target fields, including a segment editor for Hyrox/WOD). Build them in the Templates tab, or save the current session as one. Built-in presets (Hyrox, Fran, Murph, Cindy) are one tap to add.
+- Reusable templates for all three session types: lifts (exercise lists), run (any run type's fields, including a reps×distance@goal interval-set editor for intervals), and conditioning (any type's target fields, including a segment editor for Hyrox/WOD). Build them in the Templates tab, or save the current session as one. Built-in presets (Hyrox, Fran, Murph, Cindy) are one tap to add.
 - Browse a starter-template library and add presets to your own templates with one tap
 - Edit any saved session (tap it in History)
 - Sort and filter history by type, phase, name, and date range
@@ -58,12 +58,14 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Cross-day session support for workouts that span midnight
 - Settings grouped into sections (Profile, Appearance, Units & tracking, Data, Danger zone): theme (light/dark/auto), 24h vs 12h, weight units (lb/kg), distance units (mi/km), intensity tracking
 - In-app modals and toasts throughout — no native browser popups
-- Export and import your data as JSON (with schema versioning)
+- "Finish & Save" flow when ending a workout: set the end time to now (or a few minutes back with one tap), keep a time you already entered, or save with no end time at all — handy for logging old workouts
+- Export and import your data as JSON (with schema versioning), from Settings or the History tab
+- Import your Hevy history from a CSV export (Settings → Data) — each Hevy workout becomes a lifts session, supersets split into separate exercises, drop sets split into separate sets, and re-importing the same file skips duplicates
 - Delete your cloud account from inside the app
 
 ## Status
 
-v0.23 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates + a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, and custom in-app modals. An in-progress workout now survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
+v0.25 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, and Hevy CSV import (the first external-data import). An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -94,7 +96,7 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 ## Roadmap
 
 **Next up:**
-- Import workouts from Garmin / Strava / Apple Health, so you stop hand-entering pace/distance/HR (starting with activity-file import, then Strava)
+- Import cardio workouts from Garmin / Strava (activity files first — GPX/TCX, then .FIT — then Strava), so you stop hand-entering pace/distance/HR. (Lifting import from Hevy already shipped in v0.25.)
 
 **The reason this exists:**
 - Combined lifting + cardio fatigue score (the differentiator no other app does for hybrid athletes)

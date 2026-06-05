@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 14
+## Current schema version: 15
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -64,7 +64,8 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
   "exercises": [ ... ],
   "runData": {},
   "condData": {},
-  "notes": "Really not into it today"
+  "notes": "Really not into it today",
+  "importSource": ""
 }
 ```
 
@@ -83,6 +84,7 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 | `runData` | object | Used when `type === "run"`. Empty otherwise. |
 | `condData` | object | Used when `type === "conditioning"`. Empty otherwise. |
 | `notes` | string | Free-text notes about the whole session. |
+| `importSource` | string | Stable id of an external source this session was imported from, used to skip duplicates on re-import. Empty for hand-logged sessions. Added in v15. Format `<source>:<id>` — e.g. Hevy CSV import uses `hevy:<start_time>\|<title>`. |
 
 ## Exercise object (lifts only)
 
@@ -290,6 +292,8 @@ Built-in presets (Hyrox, Fran, Murph, Cindy) ship in code as `WORKOUT_PRESETS` �
 
 **As of v0.22.0 the `+New template` builder is config-driven over `COND_TYPES`:** pick any conditioning type (erg/sled/ruck/metcon/circuit/other) and the builder renders that type's fields, plus a segment editor (label + target only) for `circuit`. `saveTemplateDraft` stores `condType` + whatever fields you filled (blank fields are dropped). `saveCurrentAsTemplate` likewise preserves the session's `condType` and field values. So a conditioning template can now carry any type, not just `{modality, total}`. Legacy templates with no `condType` still display as modality/target.
 
+**As of v0.24.0 the run path of the builder is also config-driven, over `RUN_TYPES`:** pick any run type (easy/tempo/intervals/long/race) and the builder renders that type's fields, plus a reps×distance@goal+recovery interval-set editor for `intervals` (stored in `runData.intervalSets`). `saveTemplateDraft` stores `runType` + filled fields (blanks dropped); a run template may legitimately be type-only (no targets). So a run template now carries any type's targets, not just `{runType, distance, pace}`. Loading a run or conditioning template deep-copies its `runData`/`condData` so editing the session can't mutate the saved template's arrays. Still no schema change — `run_data`/`cond_data` are jsonb.
+
 Lifts templates store exercise names and set types only — never weights or reps. Run/conditioning templates store *target* values only; you fill the actual numbers each session. The `id` field was added in v8 alongside cloud sync; old templates without an id get one assigned on first upload. `runData`/`condData` are omitted (not sent to the cloud) for lifts templates, so lifts templates remain compatible with a `templates` table that predates the v10 `run_data`/`cond_data` columns.
 
 ## Settings object
@@ -340,10 +344,17 @@ When signed in, data lives in three Postgres tables. Row Level Security ensures 
 | `run_data` | jsonb | Same object as local `runData`. |
 | `cond_data` | jsonb | Same object as local `condData`. |
 | `notes` | text | Defaults to empty string. |
+| `import_source` | text | Nullable. Maps to local `importSource`; empty string → null. Added in v15. |
 | `created_at` | timestamptz | Server-set on insert. |
 | `updated_at` | timestamptz | Updated on every write. |
 
 Indexes: `(user_id, date desc)`, `(user_id, type)`.
+
+Migration to add the v15 column (run once in the Supabase SQL editor):
+
+```sql
+alter table sessions add column if not exists import_source text;
+```
 
 ### `templates` table
 
@@ -456,7 +467,8 @@ Other notes:
 
 ## Schema version history
 
-- **v14** (current) — Added the `circuit` conditioning type (Hyrox/WOD): `format`, `totalTime`, `result`, `rpe`, `notes`, plus a repeatable `segments` array (`{label, target, result}` rows, modeled on run `intervalSets`). For segment-based events — Hyrox races and CrossFit WODs. Additive and backwards compatible — no DB migration (`cond_data` is jsonb). `segments` is only written once a row is added, so blank forms aren't flagged as having content. *App v0.21.0* added circuit *templates* on top of this (built-in Hyrox/WOD presets in `WORKOUT_PRESETS`, deep-copied on add/load) — same `condData` shape, no schema change. *App v0.22.0* made the `+New template` builder config-driven over `COND_TYPES`, so any conditioning type (with a segment editor for circuit) can be hand-built — still the same `condData` shape, no schema change.
+- **v15** (current) — External data import. Adds a session-level `importSource` field (and an `import_source` text column on the `sessions` table — one-line migration, see the `sessions` table section) so the same imported workout isn't added twice on re-import. Format `<source>:<id>`. First consumer is the **Hevy CSV import** (app v0.25.0), which sets `hevy:<start_time>|<title>` and maps each Hevy workout to a `lifts` session (one exercise per `exercise_title`, so supersets split; each drop-set row becomes its own working set). Additive and backwards compatible — old sessions have no `importSource` (treated as empty); the DB column is nullable. The field is generic and reusable by future GPX/TCX/FIT/Strava imports. (The originally-planned first source was GPX/TCX; Hevy CSV shipped first because it maps cleanly to the existing lifts model with no new dependency.)
+- **v14** — Added the `circuit` conditioning type (Hyrox/WOD): `format`, `totalTime`, `result`, `rpe`, `notes`, plus a repeatable `segments` array (`{label, target, result}` rows, modeled on run `intervalSets`). For segment-based events — Hyrox races and CrossFit WODs. Additive and backwards compatible — no DB migration (`cond_data` is jsonb). `segments` is only written once a row is added, so blank forms aren't flagged as having content. *App v0.21.0* added circuit *templates* on top of this (built-in Hyrox/WOD presets in `WORKOUT_PRESETS`, deep-copied on add/load) — same `condData` shape, no schema change. *App v0.22.0* made the `+New template` builder config-driven over `COND_TYPES`, so any conditioning type (with a segment editor for circuit) can be hand-built — still the same `condData` shape, no schema change. *App v0.23.0* aligned the `SCHEMA_VERSION` constant to 14 (it had been left at 13 when circuit shipped in v0.20.0) and fixed an in-progress-session data-loss bug — no shape change. *App v0.24.0* added the Finish & Save end-time flow, made run templates config-driven over `RUN_TYPES`, and added History-tab import/export — all no shape change.
 - **v13** — Conditioning is now type-based (like run types). `condData` gained `condType` (`erg`/`sled`/`ruck`/`metcon`/`other`) and per-type fields. Pre-v13 conditioning sessions (`modality`/`total`/`rpe`/`splits`, no `condType`) map to the `other` type on display, so old data is preserved. Additive and backwards compatible — no DB migration (`cond_data` is jsonb).
 - **v12** — Race runs gained `warmup` and `cooldown` (free text), tracked apart from the race effort. The race effort stays in `distance`/`time`/`pace` (relabeled "Race distance/time/pace" in the UI), so old race sessions, the Stats pace chart, and the pace sanity check are unaffected. Additive and backwards compatible — no DB migration (run_data is jsonb).
 - **v11** — Run session data shape extended. Tempo runs gained `warmup`, `tempoDistance`, `tempoTime`, `tempoPace`, `cooldown` (work portion tracked apart from totals). Interval runs gained an `intervalSets` array (`{reps, distance, goal, recovery}` blocks) replacing the single `workout`/`targetPace` triple in the UI. Additive and backwards compatible — old run fields are preserved, no DB migration (run_data is jsonb).

@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.24.0 — Finish & Save flow, run templates, history tools
+  HYBRID TRAINER v0.25.0 — Import workouts from Hevy (CSV)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.25.0:
+    - Import your Hevy history. Settings → Data → "Import from Hevy (CSV)".
+      Export your workouts from Hevy (Profile → Settings → Export Workout Data),
+      pick the CSV, and each Hevy workout is added as a lifts session. It MERGES
+      (never replaces) and dedupes on re-import via a new session.importSource
+      field ("hevy:<start_time>|<title>").
+    - Mapping: one Hevy workout -> one lifts session; each exercise_title -> a
+      separate exercise (so a superset becomes two exercises); each set row -> a
+      set; each drop of a drop set is its own row in Hevy, so it becomes its own
+      working set; warmup rows -> warmup sets. Weight unit is read from the column
+      name (weight_lbs/weight_kg) and NOT converted; you're warned on a mismatch.
+    - parseCSV / parseHevyDate / hevyRowsToSessions / importHevyCsv.
+    - SCHEMA bumped 14 -> 15: new `importSource` field + `import_source` column on
+      the sessions table (run: alter table sessions add column if not exists
+      import_source text;). The field is reusable by future GPX/Strava imports.
+    - Known v1 limits: Hevy cardio/duration columns are not mapped (lifting only);
+      no unit conversion.
 
   What's new in v0.24.0:
     - "Finish & Save" end-time flow for live lifts/conditioning. The Save button
@@ -658,7 +676,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.24.0</small>
+      <small>v0.25.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -927,7 +945,14 @@
       <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
       <button class="btn-secondary" onclick="importData()">Import from file</button>
     </div>
-    <p class="muted">Exports include a schemaVersion field so future versions can read old files.</p>
+    <p class="muted">Exports include a schemaVersion field so future versions can read old files. "Import from file" REPLACES all your current data with a backup.</p>
+  </div>
+
+  <div class="card">
+    <div class="btn-group" style="margin-bottom:10px">
+      <button class="btn-secondary" onclick="importHevyCsv()">Import from Hevy (CSV)</button>
+    </div>
+    <p class="muted">ADDS your Hevy workouts alongside existing data (it does not replace anything). In Hevy: Profile → Settings → Export Workout Data, then pick the CSV here. Re-importing the same file skips workouts already added. Weights import in whatever unit Hevy used, with no conversion.</p>
   </div>
 
   <h2>Danger zone</h2>
@@ -942,7 +967,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.24.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.25.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -977,7 +1002,9 @@
 // left at 13 by mistake when that shipped; SCHEMA.md already documents v14 as
 // current, so this just aligns the code with the docs. Only labels backups —
 // no migration is gated on it. (Bumped here in app v0.23.0.)
-const SCHEMA_VERSION = 14;
+// 15 = added the session-level `importSource` field (+ `import_source` DB column)
+// for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
+const SCHEMA_VERSION = 15;
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1593,7 +1620,8 @@ function emptySession() {
     name: '', phase: settings.defaultPhase || '',
     type: 'lifts', exercises: [],
     runData: {}, // populated only when type becomes 'run'
-    condData: {}, notes: ''
+    condData: {}, notes: '',
+    importSource: '' // set when a session comes from an external import (e.g. "hevy:...")
   };
 }
 function emptyExercise(name = '') { return { name, sets: [], notes: '' }; }
@@ -1685,6 +1713,7 @@ function sessionToRow(session, userId) {
     run_data: session.runData || {},
     cond_data: session.condData || {},
     notes: session.notes || '',
+    import_source: session.importSource || null,
     updated_at: new Date().toISOString()
   };
 }
@@ -1703,7 +1732,8 @@ function rowToSession(row) {
     exercises: row.exercises || [],
     runData: row.run_data || {},
     condData: row.cond_data || {},
-    notes: row.notes || ''
+    notes: row.notes || '',
+    importSource: row.import_source || ''
   };
 }
 function templateToRow(template, userId) {
@@ -4242,6 +4272,198 @@ async function importData() {
           showToast('Import successful.', 'success');
         }
       } catch (err) { showToast('Invalid JSON file: ' + err.message, 'error'); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// =====================================================================
+// HEVY CSV IMPORT
+// Imports a Hevy "Export Workout Data" CSV into lifts sessions.
+// One CSV row = one set. Workouts group by start_time; exercises group
+// by exercise_title (so a superset becomes two separate exercises); each
+// drop of a drop set is already its own row in Hevy, so it becomes its
+// own working set. Additive MERGE with dedupe via session.importSource
+// ("hevy:<start_time>|<title>") — unlike importData(), it never replaces
+// existing data. Weight unit is read from the column name (weight_lbs vs
+// weight_kg) and NOT converted (units are display labels only).
+// =====================================================================
+
+// Robust CSV parser: handles quoted fields, embedded commas/newlines, and
+// "" escaped quotes. Returns an array of rows, each an array of strings.
+function parseCSV(text) {
+  text = String(text).replace(/\r\n?/g, '\n'); // normalize newline styles
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } // escaped quote
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += c;
+    }
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+const HEVY_MONTHS = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+  jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+// "28 Mar 2025, 17:29" -> { date:'2025-03-28', time:'17:29' }. null if unparseable.
+// We parse by hand rather than trust new Date() on this non-standard format.
+function parseHevyDate(str) {
+  if (!str) return null;
+  const m = String(str).trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4}),?\s+(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const mon = HEVY_MONTHS[m[2].slice(0, 3).toLowerCase()];
+  if (!mon) return null;
+  return {
+    date: `${m[3]}-${mon}-${m[1].padStart(2, '0')}`,
+    time: `${m[4].padStart(2, '0')}:${m[5]}`
+  };
+}
+
+// Turn parsed CSV rows (incl. header) into Hybrid Trainer lifts sessions.
+// Returns { sessions, unit, skippedUnparseable }.
+function hevyRowsToSessions(rows) {
+  if (!rows || rows.length < 2) return { sessions: [], unit: '', skippedUnparseable: 0 };
+  const header = rows[0].map(h => h.trim().toLowerCase());
+  const idx = (name) => header.indexOf(name);
+  const col = {
+    title: idx('title'), start: idx('start_time'), end: idx('end_time'),
+    description: idx('description'), exercise: idx('exercise_title'),
+    exNotes: idx('exercise_notes'), setType: idx('set_type'),
+    reps: idx('reps'), rpe: idx('rpe')
+  };
+  // Weight column name carries the unit; never convert the value.
+  let weightCol = idx('weight_lbs'), unit = 'lb';
+  if (weightCol === -1) { weightCol = idx('weight_kg'); unit = 'kg'; }
+  if (weightCol === -1) { weightCol = idx('weight'); unit = ''; }
+
+  const get = (r, c) => (c >= 0 && c < r.length ? String(r[c] || '').trim() : '');
+  const workouts = new Map(); // key "start|title" -> session (newest order applied later)
+  let skippedUnparseable = 0;
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || r.length === 0 || (r.length === 1 && r[0].trim() === '')) continue; // blank line
+    const startRaw = get(r, col.start);
+    const title = get(r, col.title);
+    const parsed = parseHevyDate(startRaw);
+    if (!parsed) { skippedUnparseable++; continue; }
+    const wkey = startRaw + '|' + title;
+
+    let session = workouts.get(wkey);
+    if (!session) {
+      const endParsed = parseHevyDate(get(r, col.end));
+      session = {
+        id: crypto.randomUUID(),
+        date: parsed.date, startTime: parsed.time,
+        endTime: endParsed ? endParsed.time : '',
+        endDate: (endParsed && endParsed.date !== parsed.date) ? endParsed.date : '',
+        bodyweight: '', name: title || 'Hevy workout', phase: '',
+        type: 'lifts', exercises: [], runData: {}, condData: {},
+        notes: get(r, col.description),
+        importSource: 'hevy:' + wkey,
+        _exMap: new Map() // temp: exercise_title -> exercise object
+      };
+      workouts.set(wkey, session);
+    }
+
+    // Group by exercise_title -> a superset's two exercises stay separate.
+    const exName = get(r, col.exercise);
+    let ex = session._exMap.get(exName);
+    if (!ex) {
+      ex = { name: exName || 'Exercise', sets: [], notes: get(r, col.exNotes) };
+      session._exMap.set(exName, ex);
+      session.exercises.push(ex);
+    } else if (!ex.notes) {
+      const n = get(r, col.exNotes); if (n) ex.notes = n;
+    }
+
+    // Each row is one set. Drop-set rows each become their own working set.
+    const stype = get(r, col.setType).toLowerCase();
+    const weight = get(r, weightCol), reps = get(r, col.reps);
+    if (stype === 'warmup') {
+      ex.sets.push({ type: 'warmup', weight, reps });
+    } else {
+      ex.sets.push({ type: 'working', weight, reps, rpe: get(r, col.rpe), rir: '' });
+    }
+  }
+
+  const sessions = [];
+  for (const s of workouts.values()) { delete s._exMap; sessions.push(s); }
+  return { sessions, unit, skippedUnparseable };
+}
+
+async function importHevyCsv() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv,text/csv';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      try {
+        const rows = parseCSV(String(ev.target.result));
+        if (!rows.length) { showToast('That file looks empty.', 'error'); return; }
+        const header = rows[0].map(h => h.trim().toLowerCase());
+        if (header.indexOf('exercise_title') === -1 || header.indexOf('start_time') === -1) {
+          showToast('This does not look like a Hevy CSV export.', 'error');
+          return;
+        }
+        const { sessions, unit, skippedUnparseable } = hevyRowsToSessions(rows);
+        if (!sessions.length) { showToast('No workouts found in that file.', 'error'); return; }
+
+        const existing = new Set(state.history.map(s => s.importSource).filter(Boolean));
+        const fresh = sessions.filter(s => !existing.has(s.importSource));
+        const already = sessions.length - fresh.length;
+
+        if (!fresh.length) {
+          await modalConfirm(`All ${sessions.length} workout(s) in this file were already imported. Nothing new to add.`);
+          return;
+        }
+
+        const dates = fresh.map(s => s.date).filter(Boolean).sort();
+        const range = dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} to ${dates[dates.length - 1]}`) : '';
+
+        let msg = `Found ${sessions.length} workout(s) in this Hevy export`;
+        if (range) msg += ` (${range})`;
+        msg += `.\n\n${fresh.length} new`;
+        if (already) msg += `, ${already} already imported`;
+        if (skippedUnparseable) msg += `, ${skippedUnparseable} row(s) skipped (unreadable date)`;
+        msg += '.';
+        if (unit && settings.units && unit !== settings.units) {
+          msg += `\n\nNote: this file logs weight in ${unit} but your app is set to ${settings.units}. Numbers import as-is and are NOT converted.`;
+        }
+        msg += `\n\nImport the ${fresh.length} new workout(s)?`;
+
+        if (!await modalConfirm(msg)) return;
+
+        for (const s of fresh) state.history.unshift(s);
+        // Keep history newest-first; imported old workouts slot into place by date.
+        state.history.sort((a, b) => {
+          const ad = a.date || '', bd = b.date || '';
+          if (ad !== bd) return ad < bd ? 1 : -1;
+          return (b.startTime || '').localeCompare(a.startTime || '');
+        });
+        state.editingHistoryIndex = null;
+        saveState();
+        renderLog();
+        if (typeof renderHistory === 'function') renderHistory();
+        for (const s of fresh) cloudPushSession(s);
+        showToast(`Imported ${fresh.length} workout(s) from Hevy.`, 'success');
+      } catch (err) {
+        showToast('Could not read that file: ' + err.message, 'error');
+      }
     };
     reader.readAsText(file);
   };
