@@ -322,6 +322,23 @@ Lifts templates store exercise names and set types only — never weights or rep
 | `displayName` | string | Free text shown in header instead of email. Empty = fall back to email. Added in v9. Only meaningful in cloud-sync mode. |
 | `avatar` | string | One of: `lifter`, `runner`, `strong`, `fire`, `bolt`, or empty. Maps to an emoji in the UI. Added in v9. |
 
+## Importing your own data (additive, app v0.27.0)
+
+Two different imports exist, and they behave very differently:
+
+- **"Import from file" (full backup, JSON)** — REPLACES all current data with the file's contents. Use this to restore a complete backup.
+- **"Import a workout (paste)"** — ADDS workouts without touching what's already there. Paste one [Session object](#session-object) or an array of them (a `{ "history": [...] }` or `{ "sessions": [...] }` wrapper is also accepted). It's the front end for a reusable merge core (`mergeImportedSessions`) that any future source (a Garmin file parser, an AI reader, account merge) can call.
+
+Rules the importer applies, so AI- or hand-authored JSON is forgiving:
+
+- A single session loads into the in-progress slot on the **Log tab for review** before you save; multiple sessions merge straight into `history`.
+- Batches **dedupe by `id`** — a session whose `id` already exists in your history is skipped. Sessions without an `id` get a fresh one (so they always import; re-pasting the same id-less JSON can double-import).
+- Missing/invalid `type` defaults to `lifts`; missing `date` defaults to today; run sessions get `runType: "easy"` if absent.
+- **All numbers are coerced to strings** (the app stores strings), so JSON with real numbers (e.g. `"reps": 10` vs `10`) both work.
+- Unknown top-level keys are dropped. **Units are not converted** — values must already be in the user's display units (the "Copy AI prompt" button bakes the current units into the prompt for this reason).
+
+This import does not change the data shape, so it is not tied to `SCHEMA_VERSION`.
+
 ## Cloud database schema (Supabase)
 
 When signed in, data lives in three Postgres tables. Row Level Security ensures each user can only read/write their own rows.

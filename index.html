@@ -1,7 +1,30 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.26.0 — In-app feedback (bug report / feature request)
+  HYBRID TRAINER v0.27.0 — Generic additive workout import (paste JSON)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.27.0:
+    - "Import a workout (paste)" (Settings -> Data). Paste one or more sessions
+      as JSON in the app's own schema shape; it ADDS them (never replaces). A
+      single workout loads onto the Log tab for review before saving; a batch
+      merges into history, deduped by id, with a summary. A "Copy AI prompt"
+      button copies a ready-made prompt (with your unit settings baked in) so
+      ChatGPT/Claude can convert handwritten notes, a photo, or another app's
+      export into the right JSON.
+    - The real deliverable is mergeImportedSessions(), a reusable additive-import
+      CORE. Future feeders (a Garmin GPX/TCX/FIT parser, an AI reader, account
+      merge) only need to produce session objects and call it. JSON is the
+      contract because it carries lifts AND runs AND conditioning (the Hevy CSV
+      path is lifts-only).
+    - Helpers: _stringifyNumbers (AI numeric output -> strings), parseImported-
+      Sessions (single object / array / {history|sessions} wrapper), normalize-
+      ImportedSession (fills id/type/date, run back-compat, drops junk keys),
+      switchToLogTab, buildAiImportPrompt, openImportWorkoutModal.
+    - No schema change (uses the existing session shape + importSource);
+      SCHEMA_VERSION stays 15. No migration needed.
+    - Known limit: dedupe is id-based, so re-pasting the SAME AI output (fresh id
+      each time) can double-import in batch mode; single-import is reviewed, so
+      it's visible there.
 
   What's new in v0.26.0:
     - "Send feedback" button (Settings -> Feedback). Opens a modal with a
@@ -695,7 +718,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.26.0</small>
+      <small>v0.27.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -974,6 +997,13 @@
     <p class="muted">ADDS your Hevy workouts alongside existing data (it does not replace anything). In Hevy: Profile → Settings → Export Workout Data, then pick the CSV here. Re-importing the same file skips workouts already added. Weights import in whatever unit Hevy used, with no conversion.</p>
   </div>
 
+  <div class="card">
+    <div class="btn-group" style="margin-bottom:10px">
+      <button class="btn-secondary" onclick="openImportWorkoutModal()">Import a workout (paste)</button>
+    </div>
+    <p class="muted">ADDS workouts from pasted JSON (it does not replace anything). Use "Copy AI prompt" to have ChatGPT/Claude turn handwritten notes, a photo, or another app's export into the right format. One workout opens on the Log tab to review before saving; several are added to your history (duplicates with the same id are skipped).</p>
+  </div>
+
   <h2>Feedback</h2>
   <div class="card">
     <div class="btn-group" style="margin-bottom:10px">
@@ -994,7 +1024,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.26.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.27.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1032,7 +1062,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 15;
-const APP_VERSION = 'v0.26.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.27.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4498,6 +4528,152 @@ async function importHevyCsv() {
   input.click();
 }
 
+// =====================================================================
+// GENERIC ADDITIVE IMPORT  (paste-JSON front end + reusable merge core)
+// mergeImportedSessions() is the shared core: future feeders (a Garmin
+// file parser, an AI reader, account merge) only need to produce session
+// objects in the schema shape and hand them here. It ADDS (never replaces),
+// dedupes batches by id, and routes a single session to the Log tab for
+// review. See SCHEMA.md for the session shape.
+// =====================================================================
+
+// Recursively turn numbers into strings (the app stores everything as
+// strings, so AI output with real numbers still imports cleanly).
+function _stringifyNumbers(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+  if (Array.isArray(v)) return v.map(_stringifyNumbers);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const k in v) out[k] = _stringifyNumbers(v[k]);
+    return out;
+  }
+  return v;
+}
+
+const _IMPORT_SESSION_KEYS = ['id','date','startTime','endTime','endDate','bodyweight',
+  'name','phase','type','exercises','runData','condData','notes','importSource'];
+
+// Coerce one raw object into a valid session: known keys over emptySession()
+// defaults, numbers stringified, id/type/date ensured, run back-compat applied.
+function normalizeImportedSession(raw) {
+  const base = emptySession();
+  const src = _stringifyNumbers(raw && typeof raw === 'object' ? raw : {});
+  for (const k of _IMPORT_SESSION_KEYS) {
+    if (src[k] !== undefined && src[k] !== null) base[k] = src[k];
+  }
+  if (!['lifts','run','conditioning'].includes(base.type)) base.type = 'lifts';
+  if (!base.id || typeof base.id !== 'string') base.id = crypto.randomUUID();
+  if (!base.date || !/^\d{4}-\d{2}-\d{2}$/.test(base.date)) base.date = new Date().toISOString().slice(0, 10);
+  if (!Array.isArray(base.exercises)) base.exercises = [];
+  if (!base.runData || typeof base.runData !== 'object') base.runData = {};
+  if (!base.condData || typeof base.condData !== 'object') base.condData = {};
+  if (base.type === 'run' && !base.runData.runType) base.runData.runType = 'easy';
+  return base;
+}
+
+// Parse pasted text into an array of raw session objects. Accepts a single
+// session object, an array, or a wrapper ({history:[...]} / {sessions:[...]}).
+function parseImportedSessions(text) {
+  let data;
+  try { data = JSON.parse(text); }
+  catch (e) { throw new Error('That is not valid JSON. ' + e.message); }
+  let list;
+  if (Array.isArray(data)) list = data;
+  else if (data && Array.isArray(data.history)) list = data.history;
+  else if (data && Array.isArray(data.sessions)) list = data.sessions;
+  else if (data && typeof data === 'object') list = [data];
+  else throw new Error('Expected a workout object or an array of them.');
+  list = list.filter(x => x && typeof x === 'object');
+  if (!list.length) throw new Error('No workouts found in that JSON.');
+  return list;
+}
+
+function switchToLogTab() {
+  document.querySelectorAll('nav.bottom-tabs button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelector('nav.bottom-tabs button[data-screen="log"]').classList.add('active');
+  document.getElementById('screen-log').classList.add('active');
+}
+
+// THE CORE. Takes raw session objects, adds them to the user's data.
+// 1 -> load into the Log tab for review (not saved). Many -> merge into
+// history (dedupe by id) with a summary. Returns the count added/loaded.
+async function mergeImportedSessions(rawSessions) {
+  const sessions = rawSessions.map(normalizeImportedSession);
+
+  if (sessions.length === 1) {
+    if (sessionHasContent() || state.editingHistoryIndex !== null) {
+      if (!await modalConfirm('You have an unsaved current session. Replace it with the imported workout to review?')) return 0;
+    }
+    state.editingHistoryIndex = null;
+    state.currentSession = sessions[0];
+    saveState();
+    switchToLogTab();
+    renderLog();
+    window.scrollTo(0, 0);
+    showToast('Loaded for review. Check it, then Save.', 'success');
+    return 1;
+  }
+
+  const existing = new Set(state.history.map(s => s.id).filter(Boolean));
+  const fresh = sessions.filter(s => !existing.has(s.id));
+  const already = sessions.length - fresh.length;
+  if (!fresh.length) {
+    await modalConfirm(`All ${sessions.length} workout(s) are already in your history. Nothing new to add.`);
+    return 0;
+  }
+  let msg = `Found ${sessions.length} workout(s). ${fresh.length} new`;
+  if (already) msg += `, ${already} already in your history`;
+  msg += `.\n\nAdd the ${fresh.length} new workout(s) to your history?`;
+  if (!await modalConfirm(msg)) return 0;
+
+  for (const s of fresh) state.history.unshift(s);
+  state.history.sort((a, b) => {
+    const ad = a.date || '', bd = b.date || '';
+    if (ad !== bd) return ad < bd ? 1 : -1;
+    return (b.startTime || '').localeCompare(a.startTime || '');
+  });
+  state.editingHistoryIndex = null;
+  saveState();
+  renderLog();
+  if (typeof renderHistory === 'function') renderHistory();
+  for (const s of fresh) cloudPushSession(s);
+  showToast(`Added ${fresh.length} workout(s) to your history.`, 'success');
+  return fresh.length;
+}
+
+// Ready-made prompt so an AI reliably emits the right shape. Units are
+// injected from the user's settings (the app never converts units).
+function buildAiImportPrompt() {
+  const wU = settings.units || 'lb';
+  const dU = settings.distanceUnit || 'mi';
+  return [
+    'Convert the workout below into JSON for the Hybrid Trainer app. Output ONLY JSON, no prose, no code fences.',
+    'Return a single session object, or an array of them if there are several workouts.',
+    '',
+    'Rules:',
+    '- ALL numbers must be strings (e.g. "135", not 135).',
+    '- "date": "YYYY-MM-DD". "startTime"/"endTime": 24-hour "HH:MM" (or "" if unknown).',
+    `- Weights are in ${wU}; distances/pace are in ${dU}. Convert to those units; do NOT output other units.`,
+    '- "type" is one of: "lifts", "run", "conditioning". Use the matching sub-object and leave the others empty.',
+    '',
+    'Shapes:',
+    'lifts: { "type":"lifts", "date":"", "startTime":"", "endTime":"", "name":"", "bodyweight":"", "notes":"",',
+    '  "exercises":[ { "name":"", "notes":"", "sets":[',
+    '    {"type":"warmup","weight":"","reps":""},',
+    '    {"type":"working","weight":"","reps":"","rpe":"","rir":""} ] } ] }',
+    'run: { "type":"run", "date":"", "startTime":"", "name":"", "notes":"",',
+    '  "runData":{ "runType":"easy", "distance":"", "time":"", "pace":"", "hr":"", "rpe":"" } }',
+    '  (runType is one of easy/tempo/intervals/long/race)',
+    'conditioning: { "type":"conditioning", "date":"", "name":"", "notes":"",',
+    '  "condData":{ "condType":"erg", "machine":"", "distance":"", "time":"", "rpe":"" } }',
+    '  (condType is one of erg/sled/ruck/metcon/circuit/other)',
+    '',
+    'Here is my workout (you can also attach a photo of it):',
+    ''
+  ].join('\n');
+}
+
 function escapeHtml(str) {
   if (str === undefined || str === null) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
@@ -4679,6 +4855,66 @@ async function submitFeedback() {
   } finally {
     sendBtn.disabled = false;
   }
+}
+
+// ---- Paste-JSON import modal (front end for mergeImportedSessions) ----
+function _ensureImportWorkoutModal() {
+  if (document.getElementById('import-workout-overlay')) return;
+  const o = document.createElement('div');
+  o.id = 'import-workout-overlay';
+  o.className = 'modal-overlay';
+  o.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true">' +
+    '<h3 class="modal-title">Import a workout</h3>' +
+    '<p class="modal-message">Paste a workout as JSON (the app\'s format). One workout opens on the Log tab to review before saving; several get added to your history. This ADDS to your data, it never replaces it.</p>' +
+    '<button class="btn-small" id="import-copy-prompt" style="margin-bottom:10px;">Copy AI prompt</button>' +
+    '<textarea id="import-json" class="modal-input" placeholder=\'{ "type": "lifts", "date": "2026-06-06", ... }\' style="min-height:140px; font-family:monospace; font-size:0.85rem;"></textarea>' +
+    '<div class="modal-buttons">' +
+      '<button class="modal-btn secondary" id="import-cancel">Cancel</button>' +
+      '<button class="modal-btn primary" id="import-go">Import</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(o);
+  o.addEventListener('mousedown', e => { if (e.target === o) closeImportWorkoutModal(); });
+  document.getElementById('import-cancel').addEventListener('click', closeImportWorkoutModal);
+  document.getElementById('import-go').addEventListener('click', submitImportWorkout);
+  document.getElementById('import-copy-prompt').addEventListener('click', copyAiImportPrompt);
+}
+function openImportWorkoutModal() {
+  _ensureImportWorkoutModal();
+  const ta = document.getElementById('import-json');
+  ta.value = ''; ta.classList.remove('invalid');
+  document.getElementById('import-workout-overlay').style.display = 'flex';
+  setTimeout(() => ta.focus(), 50);
+}
+function closeImportWorkoutModal() {
+  const o = document.getElementById('import-workout-overlay');
+  if (o) o.style.display = 'none';
+}
+async function copyAiImportPrompt() {
+  const text = buildAiImportPrompt();
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('AI prompt copied. Paste it into ChatGPT or Claude with your workout.', 'success');
+  } catch (e) {
+    // Fallback for browsers/contexts that block the async clipboard API
+    const ta = document.getElementById('import-json');
+    ta.value = text; ta.focus(); ta.select();
+    try { document.execCommand('copy'); showToast('AI prompt copied (from the box). Paste it into your AI, then paste the JSON back here.', 'info'); }
+    catch (e2) { showToast('Could not copy automatically. The prompt is in the box; copy it manually.', 'error'); }
+  }
+}
+async function submitImportWorkout() {
+  const ta = document.getElementById('import-json');
+  const text = (ta.value || '').trim();
+  if (!text) { ta.classList.add('invalid'); ta.focus(); return; }
+  let raw;
+  try { raw = parseImportedSessions(text); }
+  catch (err) { ta.classList.add('invalid'); showToast(err.message, 'error'); return; }
+  ta.classList.remove('invalid');
+  closeImportWorkoutModal();
+  try { await mergeImportedSessions(raw); }
+  catch (err) { showToast('Import failed: ' + (err.message || err), 'error'); }
 }
 
 loadState();
