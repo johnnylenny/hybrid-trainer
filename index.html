@@ -1,7 +1,20 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.27.0 — Generic additive workout import (paste JSON)
+  HYBRID TRAINER v0.28.0 — Simpler Data settings (import chooser)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.28.0:
+    - Settings -> Data reorganized by intent. The four lookalike cards are now
+      two groups: "Import workouts" (one button -> a chooser modal listing the
+      sources) and "Backup & restore" (Export all data + Restore from backup).
+    - openImportChooser shows source rows: From Hevy (-> importHevyCsv), From
+      Garmin (disabled, "coming soon"), and From notes/photo/another app (-> the
+      AI paste flow openImportWorkoutModal). Progressive disclosure so the page
+      stays calm and new sources are just one more row. Count (1 vs many) stays
+      auto-handled inside each importer.
+    - "Import from file" renamed "Restore from backup" so its REPLACE-everything
+      meaning is unambiguous (still importData). Pure UI/wiring change, no schema
+      change, no migration.
 
   What's new in v0.27.0:
     - "Import a workout (paste)" (Settings -> Data). Paste one or more sessions
@@ -718,7 +731,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.27.0</small>
+      <small>v0.28.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -825,7 +838,7 @@
   <h2>History</h2>
   <div class="btn-group" style="margin-bottom:12px">
     <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
-    <button class="btn-secondary" onclick="importData()">Import from file</button>
+    <button class="btn-secondary" onclick="importData()">Restore from backup</button>
   </div>
   <div class="card compact">
     <div class="row">
@@ -981,27 +994,21 @@
     </div>
   </div>
 
-  <h2>Data</h2>
+  <h2>Import workouts</h2>
+  <div class="card">
+    <div class="btn-group" style="margin-bottom:10px">
+      <button class="btn-secondary" onclick="openImportChooser()">Import workouts</button>
+    </div>
+    <p class="muted">Bring workouts in from another app or your notes (Hevy, Garmin soon, or anything via AI). Adds to your data, it never replaces anything.</p>
+  </div>
+
+  <h2>Backup &amp; restore</h2>
   <div class="card">
     <div class="btn-group" style="margin-bottom:10px">
       <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
-      <button class="btn-secondary" onclick="importData()">Import from file</button>
+      <button class="btn-secondary" onclick="importData()">Restore from backup</button>
     </div>
-    <p class="muted">Exports include a schemaVersion field so future versions can read old files. "Import from file" REPLACES all your current data with a backup.</p>
-  </div>
-
-  <div class="card">
-    <div class="btn-group" style="margin-bottom:10px">
-      <button class="btn-secondary" onclick="importHevyCsv()">Import from Hevy (CSV)</button>
-    </div>
-    <p class="muted">ADDS your Hevy workouts alongside existing data (it does not replace anything). In Hevy: Profile → Settings → Export Workout Data, then pick the CSV here. Re-importing the same file skips workouts already added. Weights import in whatever unit Hevy used, with no conversion.</p>
-  </div>
-
-  <div class="card">
-    <div class="btn-group" style="margin-bottom:10px">
-      <button class="btn-secondary" onclick="openImportWorkoutModal()">Import a workout (paste)</button>
-    </div>
-    <p class="muted">ADDS workouts from pasted JSON (it does not replace anything). Use "Copy AI prompt" to have ChatGPT/Claude turn handwritten notes, a photo, or another app's export into the right format. One workout opens on the Log tab to review before saving; several are added to your history (duplicates with the same id are skipped).</p>
+    <p class="muted">Export a full backup of everything (the file includes a schemaVersion so future versions can read it). Restoring a backup REPLACES all your current data.</p>
   </div>
 
   <h2>Feedback</h2>
@@ -1024,7 +1031,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.27.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.28.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1062,7 +1069,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 15;
-const APP_VERSION = 'v0.27.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.28.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4915,6 +4922,47 @@ async function submitImportWorkout() {
   closeImportWorkoutModal();
   try { await mergeImportedSessions(raw); }
   catch (err) { showToast('Import failed: ' + (err.message || err), 'error'); }
+}
+
+// ---- Import source chooser (progressive disclosure for "Import workouts") ----
+// Routes to the existing importers; the count (1 vs many) is auto-handled inside
+// each. New sources (Garmin/Strava/Apple) become one more row here.
+function _ensureImportChooser() {
+  if (document.getElementById('import-chooser-overlay')) return;
+  const o = document.createElement('div');
+  o.id = 'import-chooser-overlay';
+  o.className = 'modal-overlay';
+  const row = (id, title, desc, disabled) =>
+    '<button class="modal-btn secondary" id="' + id + '"' + (disabled ? ' disabled' : '') +
+    ' style="display:block; width:100%; text-align:left; height:auto; padding:12px 14px; margin-bottom:8px;' +
+    (disabled ? ' opacity:0.55;' : '') + '">' +
+    '<span style="display:block; font-weight:600;">' + title + '</span>' +
+    '<span style="display:block; font-size:0.85rem; opacity:0.7; margin-top:2px;">' + desc + '</span>' +
+    '</button>';
+  o.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true">' +
+    '<h3 class="modal-title">Import workouts</h3>' +
+    '<p class="modal-message">Where are these workouts coming from? Each option adds to your data, it never replaces anything.</p>' +
+    row('import-src-hevy', 'From Hevy', 'Export a CSV in Hevy, then pick it here.', false) +
+    row('import-src-garmin', 'From Garmin', 'Coming soon.', true) +
+    row('import-src-ai', 'From notes, a photo, or another app', 'Use an AI to convert it, then paste the result.', false) +
+    '<div class="modal-buttons">' +
+      '<button class="modal-btn secondary" id="import-chooser-cancel">Cancel</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(o);
+  o.addEventListener('mousedown', e => { if (e.target === o) closeImportChooser(); });
+  document.getElementById('import-chooser-cancel').addEventListener('click', closeImportChooser);
+  document.getElementById('import-src-hevy').addEventListener('click', () => { closeImportChooser(); importHevyCsv(); });
+  document.getElementById('import-src-ai').addEventListener('click', () => { closeImportChooser(); openImportWorkoutModal(); });
+}
+function openImportChooser() {
+  _ensureImportChooser();
+  document.getElementById('import-chooser-overlay').style.display = 'flex';
+}
+function closeImportChooser() {
+  const o = document.getElementById('import-chooser-overlay');
+  if (o) o.style.display = 'none';
 }
 
 loadState();

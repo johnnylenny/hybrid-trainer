@@ -67,7 +67,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 ## Status
 
-v0.27 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
+v0.28 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 

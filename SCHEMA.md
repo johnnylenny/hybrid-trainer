@@ -326,8 +326,8 @@ Lifts templates store exercise names and set types only — never weights or rep
 
 Two different imports exist, and they behave very differently:
 
-- **"Import from file" (full backup, JSON)** — REPLACES all current data with the file's contents. Use this to restore a complete backup.
-- **"Import a workout (paste)"** — ADDS workouts without touching what's already there. Paste one [Session object](#session-object) or an array of them (a `{ "history": [...] }` or `{ "sessions": [...] }` wrapper is also accepted). It's the front end for a reusable merge core (`mergeImportedSessions`) that any future source (a Garmin file parser, an AI reader, account merge) can call.
+- **"Restore from backup" (full backup, JSON)** — REPLACES all current data with the file's contents. Use this to restore a complete backup. Lives under **Settings → Data → Backup & restore** (alongside "Export all data").
+- **Importing workouts (additive)** — ADDS workouts without touching what's already there. Surfaced via **Settings → Data → Import workouts**, which opens a chooser of sources (Hevy CSV, Garmin "coming soon", or "from notes/a photo/another app" = the AI paste flow). The paste flow accepts one [Session object](#session-object) or an array of them (a `{ "history": [...] }` or `{ "sessions": [...] }` wrapper is also accepted). All additive paths feed a reusable merge core (`mergeImportedSessions`) that any future source (a Garmin file parser, an AI reader, account merge) can call.
 
 Rules the importer applies, so AI- or hand-authored JSON is forgiving:
 
