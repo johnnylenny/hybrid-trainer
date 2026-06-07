@@ -61,11 +61,12 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - "Finish & Save" flow when ending a workout: set the end time to now (or a few minutes back with one tap), keep a time you already entered, or save with no end time at all — handy for logging old workouts
 - Export and import your data as JSON (with schema versioning), from Settings or the History tab
 - Import your Hevy history from a CSV export (Settings → Data) — each Hevy workout becomes a lifts session, supersets split into separate exercises, drop sets split into separate sets, and re-importing the same file skips duplicates
+- Send feedback (bug reports or feature requests) from inside the app (Settings → Feedback), signed in or not
 - Delete your cloud account from inside the app
 
 ## Status
 
-v0.25 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, and Hevy CSV import (the first external-data import). An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
+v0.26 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import (the first external-data import), and an in-app feedback form. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 

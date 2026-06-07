@@ -1,7 +1,26 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.25.0 — Import workouts from Hevy (CSV)
+  HYBRID TRAINER v0.26.0 — In-app feedback (bug report / feature request)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.26.0:
+    - "Send feedback" button (Settings -> Feedback). Opens a modal with a
+      type (Bug / Feature request), a message, and an optional contact, and
+      saves a row to a new Supabase `feedback` table. Works signed-in OR
+      anonymous (the sb client exists for everyone). Auto-attaches context:
+      app version, signed-in status, email (if signed in), app mode, current
+      screen, and user agent — so a report is actually actionable.
+    - The table has NO select policy, so reports are private (read them in the
+      Supabase dashboard). Insert is allowed for anyone; a signed-in user can
+      only attribute to themselves. Migration required:
+      create table feedback ...  (see SCHEMA.md / HANDOFF for the full SQL).
+    - New `APP_VERSION` constant (display/build version, separate from the data
+      `SCHEMA_VERSION`). openFeedbackModal / submitFeedback / _ensureFeedbackModal.
+    - No data-format change — `SCHEMA_VERSION` stays 15 (the feedback table is a
+      separate table, not part of the export/session shape).
+    - Known limit: the table is insertable with the public anon key, so junk
+      rows are possible. Fine for a small friends app; anti-spam (require
+      sign-in / rate limit) is future work. Message is capped at 2000 chars.
 
   What's new in v0.25.0:
     - Import your Hevy history. Settings → Data → "Import from Hevy (CSV)".
@@ -676,7 +695,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.25.0</small>
+      <small>v0.26.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -955,6 +974,14 @@
     <p class="muted">ADDS your Hevy workouts alongside existing data (it does not replace anything). In Hevy: Profile → Settings → Export Workout Data, then pick the CSV here. Re-importing the same file skips workouts already added. Weights import in whatever unit Hevy used, with no conversion.</p>
   </div>
 
+  <h2>Feedback</h2>
+  <div class="card">
+    <div class="btn-group" style="margin-bottom:10px">
+      <button class="btn-secondary" onclick="openFeedbackModal()">Send feedback</button>
+    </div>
+    <p class="muted">Found a bug or want a feature? Tell me. Works whether or not you're signed in.</p>
+  </div>
+
   <h2>Danger zone</h2>
   <div class="card danger-zone">
     <p class="muted" style="margin-bottom:12px">Permanently deletes everything stored on this device: sessions, templates, current session. There is no undo.</p>
@@ -967,7 +994,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.25.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.26.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1005,6 +1032,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 15;
+const APP_VERSION = 'v0.26.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4567,6 +4595,90 @@ function showToast(message, type) {
   wrap.appendChild(t);
   const dur = (type === 'error') ? 5000 : 2800;
   setTimeout(() => { t.classList.add('toast-out'); setTimeout(() => t.remove(), 250); }, dur);
+}
+
+// =====================================================================
+// FEEDBACK (bug report / feature request) -> Supabase `feedback` table
+// Works signed-in OR anonymous (the sb client is created for everyone on
+// boot). The table has no select policy, so reports are private — read
+// them in the Supabase dashboard. See SCHEMA.md for the table + RLS.
+// =====================================================================
+function _ensureFeedbackModal() {
+  if (document.getElementById('feedback-modal-overlay')) return;
+  const o = document.createElement('div');
+  o.id = 'feedback-modal-overlay';
+  o.className = 'modal-overlay';
+  o.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true">' +
+    '<h3 class="modal-title">Send feedback</h3>' +
+    '<p class="modal-message">Found a bug or want a feature? Tell me. Leave a way to reach you if you want a reply.</p>' +
+    '<label style="display:block; margin-bottom:6px; font-size:0.9rem;">Type</label>' +
+    '<select id="feedback-type" class="modal-input">' +
+      '<option value="bug">Bug</option>' +
+      '<option value="feature">Feature request</option>' +
+    '</select>' +
+    '<label style="display:block; margin-bottom:6px; font-size:0.9rem;">Message</label>' +
+    '<textarea id="feedback-message" class="modal-input" maxlength="2000" placeholder="What happened, or what would you like?" style="min-height:100px;"></textarea>' +
+    '<label style="display:block; margin-bottom:6px; font-size:0.9rem;">Email or name (optional, for a reply)</label>' +
+    '<input id="feedback-contact" class="modal-input" type="text" maxlength="200" placeholder="you@example.com">' +
+    '<div class="modal-buttons">' +
+      '<button class="modal-btn secondary" id="feedback-cancel">Cancel</button>' +
+      '<button class="modal-btn primary" id="feedback-send">Send</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(o);
+  o.addEventListener('mousedown', e => { if (e.target === o) closeFeedbackModal(); });
+  document.getElementById('feedback-cancel').addEventListener('click', closeFeedbackModal);
+  document.getElementById('feedback-send').addEventListener('click', submitFeedback);
+}
+function openFeedbackModal() {
+  _ensureFeedbackModal();
+  const o = document.getElementById('feedback-modal-overlay');
+  document.getElementById('feedback-type').value = 'bug';
+  const msg = document.getElementById('feedback-message');
+  msg.value = ''; msg.classList.remove('invalid');
+  document.getElementById('feedback-contact').value = '';
+  o.style.display = 'flex';
+  setTimeout(() => msg.focus(), 50);
+}
+function closeFeedbackModal() {
+  const o = document.getElementById('feedback-modal-overlay');
+  if (o) o.style.display = 'none';
+}
+async function submitFeedback() {
+  const msgEl = document.getElementById('feedback-message');
+  const message = (msgEl.value || '').trim();
+  if (!message) { msgEl.classList.add('invalid'); msgEl.focus(); return; }
+  msgEl.classList.remove('invalid');
+  if (!sb) { showToast('Feedback needs a connection. Try again when online.', 'error'); return; }
+  const sendBtn = document.getElementById('feedback-send');
+  const contact = (document.getElementById('feedback-contact').value || '').trim();
+  const activeTab = document.querySelector('nav.bottom-tabs button.active');
+  const payload = {
+    user_id: (currentUser && currentUser.id) || null,
+    type: document.getElementById('feedback-type').value || 'bug',
+    message: message,
+    contact: contact || null,
+    app_version: APP_VERSION,
+    context: {
+      signedIn: !!currentUser,
+      email: (currentUser && currentUser.email) || null,
+      mode: appMode,
+      screen: activeTab ? activeTab.dataset.screen : '',
+      ua: navigator.userAgent
+    }
+  };
+  sendBtn.disabled = true;
+  try {
+    const { error } = await sb.from('feedback').insert(payload);
+    if (error) throw error;
+    closeFeedbackModal();
+    showToast('Thanks, feedback sent.', 'success');
+  } catch (err) {
+    showToast('Could not send feedback: ' + (err.message || err), 'error');
+  } finally {
+    sendBtn.disabled = false;
+  }
 }
 
 loadState();

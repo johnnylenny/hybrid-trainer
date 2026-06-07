@@ -429,9 +429,43 @@ One row per user. Primary key is `user_id` (not a separate id), so there's at mo
 | `avatar` | text | `avatar` (added in v9) |
 | `updated_at` | timestamptz | — |
 
+### `feedback` table (app v0.26.0)
+
+Bug reports and feature requests submitted from inside the app (Settings → Feedback). NOT tied to `SCHEMA_VERSION` (it doesn't affect the export/session data shape — same as `starter_templates`). Insertable by anyone, including anonymous users; there is **no select policy**, so clients can't read it — reports are read in the Supabase dashboard.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | `gen_random_uuid()` default. |
+| `user_id` | uuid | Nullable. `auth.users(id)` `on delete set null`. Null for anonymous submissions. |
+| `type` | text | `bug` or `feature`. |
+| `message` | text | The report. Client caps input at 2000 chars. |
+| `contact` | text | Optional email/name for a reply. |
+| `app_version` | text | The app's `APP_VERSION` at submit time (e.g. `v0.26.0`). |
+| `context` | jsonb | `{ signedIn, email, mode, screen, ua }` captured client-side. |
+| `created_at` | timestamptz | Server-set. |
+
+```sql
+create table if not exists feedback (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete set null,
+  type text not null check (type in ('bug','feature')),
+  message text not null,
+  contact text,
+  app_version text,
+  context jsonb,
+  created_at timestamptz default now()
+);
+alter table feedback enable row level security;
+-- Anyone (incl. anonymous) may submit; a signed-in user can only attribute to
+-- themselves (or leave it null). No select policy => clients cannot read feedback.
+create policy "anyone can submit feedback"
+  on feedback for insert
+  with check (user_id is null or auth.uid() = user_id);
+```
+
 ### Row Level Security
 
-All three tables have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for.
+The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private).
 
 ## Local ↔ Cloud mapping
 
