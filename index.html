@@ -1,7 +1,13 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.28.0 — Simpler Data settings (import chooser)
+  HYBRID TRAINER v0.29.0 — Import workouts from the History tab too
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.29.0:
+    - The History tab now has an "Import workouts" button (alongside Export all
+      data + Restore from backup) that opens the same openImportChooser modal as
+      Settings -> Data, so you can import from where you view your history. Pure
+      UI add, no schema change.
 
   What's new in v0.28.0:
     - Settings -> Data reorganized by intent. The four lookalike cards are now
@@ -731,7 +737,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.28.0</small>
+      <small>v0.29.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -837,6 +843,7 @@
 <section id="screen-history" class="screen">
   <h2>History</h2>
   <div class="btn-group" style="margin-bottom:12px">
+    <button class="btn-secondary" onclick="openImportChooser()">Import workouts</button>
     <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
     <button class="btn-secondary" onclick="importData()">Restore from backup</button>
   </div>
@@ -1031,7 +1038,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.28.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.29.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1069,7 +1076,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 15;
-const APP_VERSION = 'v0.28.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.29.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
