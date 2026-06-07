@@ -1,7 +1,27 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.29.0 — Import workouts from the History tab too
+  HYBRID TRAINER v0.30.0 — Challenge grid (view-only prototype) in Stats
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.30.0:
+    - PROTOTYPE: a "Challenge" grid at the top of the Stats tab. RIGHT NOW it
+      shows just YOU, from your real history — a personal consistency tracker.
+      Friends will appear as extra rows once the friends/integration backend is
+      built (the grid is already a list of people, so adding them is small).
+      A challenge is scoped to ONE activity type (Lift / Run / Conditioning
+      challenge) and has two views:
+        * Day  — the 7 days of the current week (Mon-Sun); green dot = a session
+                 of that type that day, trailing "Week" pill green when you hit
+                 your weekly goal.
+        * Week — the last 6 weeks; green dot = a week you hit your goal, trailing
+                 "Weeks" pill green if you hit the majority of weeks.
+      Three dropdowns — Type, View, and Goal (1-7 days/week, your call). The
+      goal + comments save to this browser's localStorage only (no DB change).
+      NO friends system / backend / cross-user data yet — that's the next phase.
+      No data-shape change, so SCHEMA_VERSION stays 15. challengeCardHtml /
+      challengeState / getChallengeGoal / setChallengeGoal / currentWeekDates /
+      lastNWeeks / trainedOnDay / refreshChallenge / renderChallengeComments /
+      addChallengeComment.
 
   What's new in v0.29.0:
     - The History tab now has an "Import workouts" button (alongside Export all
@@ -533,6 +553,33 @@
   .chart-card .chart-sub { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px; }
   .chart-wrap { position: relative; height: 240px; width: 100%; }
   .chart-picker { margin-bottom: 12px; }
+  /* Challenge grid (prototype) */
+  .cg-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .cg-controls select { flex: 0 0 auto; min-width: 0; width: auto; }
+  .challenge-grid { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .challenge-grid th, .challenge-grid td { padding: 7px 2px; text-align: center; }
+  .challenge-grid th.cg-day { width: 30px; }
+  .challenge-grid th { font-size: 0.7rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .challenge-grid th.cg-day small { display: block; font-size: 0.62rem; color: var(--text-dim); font-weight: 500; letter-spacing: 0; }
+  .challenge-grid .cg-name { text-align: left; white-space: nowrap; }
+  .challenge-grid tbody tr { border-top: 1px solid var(--border); }
+  .challenge-grid .cg-person { font-weight: 600; color: var(--text); }
+  .challenge-grid .cg-you { color: var(--accent); }
+  .challenge-grid .cg-ava { margin-right: 5px; }
+  .cg-dot { display: inline-block; width: 13px; height: 13px; border-radius: 50%; }
+  .cg-dot.on { background: var(--accent); }
+  .cg-dot.off { background: var(--surface-3); }
+  .cg-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
+  .cg-pill.hit { background: var(--accent); color: var(--accent-text); }
+  .cg-pill.miss { background: var(--danger); color: #fff; }
+  .cg-note { font-size: 0.72rem; color: var(--text-dim); margin: 10px 0 4px; }
+  .cg-comments { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .cg-comment { font-size: 0.85rem; margin-bottom: 8px; }
+  .cg-comment .cg-c-who { font-weight: 600; color: var(--text); margin-right: 6px; }
+  .cg-comment .cg-c-when { font-size: 0.7rem; color: var(--text-dim); }
+  .cg-comment .cg-c-text { color: var(--text-muted); margin-top: 1px; }
+  .cg-comment-box { display: flex; gap: 8px; margin-top: 8px; }
+  .cg-comment-box input { flex: 1; }
   @supports (padding: env(safe-area-inset-bottom)) {
     body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
@@ -737,7 +784,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.29.0</small>
+      <small>v0.30.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1038,7 +1085,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.29.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.30.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1076,7 +1123,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 15;
-const APP_VERSION = 'v0.29.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.30.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -3964,16 +4011,204 @@ function secondsToPace(s) {
   return mm + ':' + String(ss).padStart(2, '0');
 }
 
+// ---- Challenge grid (PROTOTYPE) -------------------------------------------
+// The look-and-feel for the future "Start a challenge with friends" feature,
+// shown inside the familiar Stats tab. RIGHT NOW it shows just YOU, from your
+// real history — a personal consistency tracker. Friends will appear as extra
+// rows once the friends/integration backend exists; the grid is already a list
+// of people so adding them is a small change. A challenge is scoped to ONE
+// activity type (a "lift challenge", "run challenge", etc.) and can be viewed
+// by Day (this week) or Week (recent weeks). Your weekly goal + comments save
+// only to this browser's localStorage for now.
+const CHALLENGE_DEFAULT_GOAL = 3;  // default sessions/week if none saved
+const CHALLENGE_WEEKS = 6;         // how many weeks the Week view shows
+const CHALLENGE_COMMENTS_KEY = 'ht_challenge_comments_proto';
+const CHALLENGE_GOAL_KEY = 'ht_challenge_goal_proto';
+const CHALLENGE_MODALITIES = [
+  { key: 'lifts',        label: 'Lifts',        name: 'Lift challenge' },
+  { key: 'run',          label: 'Runs',         name: 'Run challenge' },
+  { key: 'conditioning', label: 'Conditioning', name: 'Conditioning challenge' }
+];
+// Current selection (module state, like renderStats._pickedExercise).
+let challengeState = { modality: 'lifts', view: 'day' };
+
+// Your personal weekly goal (days/week of the chosen type), 1-7. Local-only for now.
+function getChallengeGoal() {
+  const v = parseInt(localStorage.getItem(CHALLENGE_GOAL_KEY), 10);
+  return (v >= 1 && v <= 7) ? v : CHALLENGE_DEFAULT_GOAL;
+}
+function setChallengeGoal(v) {
+  const n = parseInt(v, 10);
+  if (n >= 1 && n <= 7) { try { localStorage.setItem(CHALLENGE_GOAL_KEY, String(n)); } catch (e) {} }
+  refreshChallenge();
+}
+
+// YYYY-MM-DD, timezone-safe (no UTC shift), local calendar date.
+function ymdLocal(d) {
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+// Monday of the week containing date d.
+function weekStartDate(d) {
+  const x = new Date(d); x.setHours(0, 0, 0, 0);
+  const day = (x.getDay() + 6) % 7; // 0 = Monday
+  x.setDate(x.getDate() - day);
+  return x;
+}
+// The 7 dates of the current Mon-Sun week, Monday first.
+function currentWeekDates() {
+  const start = weekStartDate(new Date());
+  const out = [];
+  for (let i = 0; i < 7; i++) { const x = new Date(start); x.setDate(start.getDate() + i); out.push(ymdLocal(x)); }
+  return out;
+}
+// The last n weeks (oldest first), each { startStr, dates:[7 YYYY-MM-DD] }.
+function lastNWeeks(n) {
+  const cur = weekStartDate(new Date());
+  const out = [];
+  for (let w = n - 1; w >= 0; w--) {
+    const start = new Date(cur); start.setDate(cur.getDate() - w * 7);
+    const dates = [];
+    for (let i = 0; i < 7; i++) { const x = new Date(start); x.setDate(start.getDate() + i); dates.push(ymdLocal(x)); }
+    out.push({ startStr: ymdLocal(start), dates });
+  }
+  return out;
+}
+// Did this person do the chosen type on this date? For now there's only you,
+// read from real history. Future friends will plug their pulled sessions in here.
+function trainedOnDay(person, modality, dateStr) {
+  const hist = person.you ? state.history : (person.history || []);
+  return hist.some(s => s.type === modality && s.date === dateStr);
+}
+function daysTrainedInWeek(person, modality, dates) {
+  return dates.reduce((c, dt) => c + (trainedOnDay(person, modality, dt) ? 1 : 0), 0);
+}
+
+function challengeCardHtml() {
+  const mod = CHALLENGE_MODALITIES.find(m => m.key === challengeState.modality) || CHALLENGE_MODALITIES[0];
+  const noun = mod.label.toLowerCase().replace(/s$/, ''); // "lift" / "run" / "conditioning"
+  const view = challengeState.view;
+  const goal = getChallengeGoal();
+  const me = { name: settings.displayName || 'You', avatar: settings.avatar || '', you: true };
+  // Just you for now; friends become extra rows once the backend exists.
+  const people = [me];
+
+  const nameCell = (p) => {
+    const ava = p.avatar ? '<span class="cg-ava">' + avatarEmoji(p.avatar) + '</span>' : '';
+    const youTag = (p.you && p.name !== 'You') ? ' (you)' : '';
+    return '<td class="cg-name"><span class="cg-person' + (p.you ? ' cg-you' : '') + '">' + ava + escapeHtml(p.name) + youTag + '</span></td>';
+  };
+
+  let head, body, sub;
+  if (view === 'day') {
+    const weekDates = currentWeekDates();
+    const dayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    head = '<tr><th class="cg-name"></th>' +
+      weekDates.map((dt, i) => '<th class="cg-day">' + dayLabels[i] + '<small>' + dt.slice(8) + '</small></th>').join('') +
+      '<th>Week</th></tr>';
+    body = people.map(p => {
+      let trained = 0;
+      const cells = weekDates.map(dt => {
+        const on = trainedOnDay(p, mod.key, dt); if (on) trained++;
+        return '<td><span class="cg-dot ' + (on ? 'on' : 'off') + '"></span></td>';
+      }).join('');
+      const hit = trained >= goal;
+      const pill = '<span class="cg-pill ' + (hit ? 'hit' : 'miss') + '">' + trained + '/7</span>';
+      return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
+    }).join('');
+    sub = 'Green dot = a ' + noun + ' session that day. The Week pill turns green when you hit your goal of ' + goal + '/week.';
+  } else {
+    const weeks = lastNWeeks(CHALLENGE_WEEKS);
+    head = '<tr><th class="cg-name"></th>' +
+      weeks.map(w => { const p = w.startStr.split('-'); return '<th class="cg-day">' + Number(p[1]) + '/' + Number(p[2]) + '</th>'; }).join('') +
+      '<th>Weeks</th></tr>';
+    body = people.map(p => {
+      let weeksHit = 0;
+      const cells = weeks.map(w => {
+        const c = daysTrainedInWeek(p, mod.key, w.dates);
+        const hit = c >= goal; if (hit) weeksHit++;
+        return '<td><span class="cg-dot ' + (hit ? 'on' : 'off') + '" title="' + c + ' day' + (c === 1 ? '' : 's') + '"></span></td>';
+      }).join('');
+      const ok = weeksHit >= Math.ceil(weeks.length / 2);
+      const pill = '<span class="cg-pill ' + (ok ? 'hit' : 'miss') + '">' + weeksHit + '/' + weeks.length + '</span>';
+      return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
+    }).join('');
+    sub = 'Green = a week you hit your goal of ' + goal + '+ ' + noun + ' sessions. Last ' + weeks.length + ' weeks.';
+  }
+
+  const modSel = '<select aria-label="Activity type" onchange="setChallengeModality(this.value)">' +
+    CHALLENGE_MODALITIES.map(m => '<option value="' + m.key + '"' + (m.key === mod.key ? ' selected' : '') + '>' + m.label + '</option>').join('') + '</select>';
+  const viewSel = '<select aria-label="View" onchange="setChallengeView(this.value)">' +
+    [['day', 'Day'], ['week', 'Week']].map(v => '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>';
+  const goalSel = '<select aria-label="Weekly goal" onchange="setChallengeGoal(this.value)">' +
+    [1, 2, 3, 4, 5, 6, 7].map(n => '<option value="' + n + '"' + (n === goal ? ' selected' : '') + '>Goal: ' + n + '/wk</option>').join('') + '</select>';
+
+  return '<div class="chart-card" id="challenge-card">' +
+    '<h3>' + mod.name + '</h3>' +
+    '<div class="chart-sub">' + sub + '</div>' +
+    '<div class="cg-controls">' + modSel + viewSel + goalSel + '</div>' +
+    '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
+    '<div class="cg-note">Just you for now — friends will show up here once the friends/integration setup is built. Your goal and comments save to this browser only.</div>' +
+    '<div class="cg-comments" id="cg-comments"></div>' +
+    '<div class="cg-comment-box"><input type="text" id="cg-comment-input" placeholder="Leave a comment..." maxlength="280" onkeydown="if(event.key===&quot;Enter&quot;)addChallengeComment()"><button class="modal-btn primary" onclick="addChallengeComment()">Post</button></div>' +
+    '</div>';
+}
+
+// Re-render just the challenge card in place when a picker changes.
+function refreshChallenge() {
+  const el = document.getElementById('challenge-card');
+  if (!el) return;
+  el.outerHTML = challengeCardHtml();
+  renderChallengeComments();
+}
+function setChallengeModality(v) { challengeState.modality = v; refreshChallenge(); }
+function setChallengeView(v) { challengeState.view = v; refreshChallenge(); }
+
+function loadChallengeComments() {
+  try { return JSON.parse(localStorage.getItem(CHALLENGE_COMMENTS_KEY)) || []; }
+  catch (e) { return []; }
+}
+function renderChallengeComments() {
+  const box = document.getElementById('cg-comments');
+  if (!box) return;
+  const comments = loadChallengeComments();
+  if (comments.length === 0) { box.innerHTML = '<p class="muted">No comments yet. Be the first.</p>'; return; }
+  box.innerHTML = comments.map(c =>
+    '<div class="cg-comment"><span class="cg-c-who">' + escapeHtml(c.who) + '</span>' +
+    '<span class="cg-c-when">' + escapeHtml(c.when) + '</span>' +
+    '<div class="cg-c-text">' + escapeHtml(c.text) + '</div></div>'
+  ).join('');
+}
+function addChallengeComment() {
+  const input = document.getElementById('cg-comment-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  const comments = loadChallengeComments();
+  comments.unshift({
+    who: settings.displayName || 'You',
+    text: text,
+    when: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  });
+  try { localStorage.setItem(CHALLENGE_COMMENTS_KEY, JSON.stringify(comments)); } catch (e) {}
+  input.value = '';
+  renderChallengeComments();
+}
+
 function renderStats() {
   destroyCharts();
   const container = document.getElementById('stats-content');
+  const challengeHtml = challengeCardHtml();
 
   if (typeof Chart === 'undefined') {
-    container.innerHTML = '<div class="card"><p class="muted">Charts need an internet connection to load the charting library. Reconnect and reopen this tab.</p></div>';
+    container.innerHTML = challengeHtml + '<div class="card"><p class="muted">Charts need an internet connection to load the charting library. Reconnect and reopen this tab.</p></div>';
+    renderChallengeComments();
     return;
   }
   if (state.history.length === 0) {
-    container.innerHTML = '<div class="card"><p class="muted">No data yet. Log some sessions and your charts will appear here.</p></div>';
+    container.innerHTML = challengeHtml + '<div class="card"><p class="muted">No workouts logged yet, so your row is empty. Log some sessions and your charts will appear here too.</p></div>';
+    renderChallengeComments();
     return;
   }
 
@@ -3985,6 +4220,7 @@ function renderStats() {
   if (!renderStats._pickedRunType) renderStats._pickedRunType = 'easy';
 
   container.innerHTML =
+    challengeHtml +
     '<div class="chart-card">' +
       '<h3>Bodyweight</h3>' +
       '<div class="chart-sub">From sessions where you logged bodyweight</div>' +
@@ -4017,6 +4253,7 @@ function renderStats() {
       '<div class="chart-wrap"><canvas id="chart-volume"></canvas></div>' +
     '</div>';
 
+  renderChallengeComments();
   drawBodyweightChart();
   drawExerciseChart(renderStats._pickedExercise);
   draw1RMChart(renderStats._pickedExercise);
