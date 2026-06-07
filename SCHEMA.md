@@ -2,7 +2,7 @@
 
 This document describes the data format used by the Hybrid Trainer app. The format is intentionally simple and exportable so you can do whatever you want with your data: analyze it in a spreadsheet, build your own tools, import it into another app, or feed it to a script that calculates fatigue scores.
 
-## Current schema version: 15
+## Current schema version: 16
 
 Every exported JSON file includes a `schemaVersion` field so future versions of the app (or any downstream tools) can detect the format.
 
@@ -104,7 +104,11 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 
 ## Set object
 
-Sets have a `type` field that determines the rest of the shape. Four types:
+Sets have a `type` field that determines the rest of the shape. Four types.
+
+Any set may also carry an optional **`done`** boolean (added v16) — set `true` when the user ticks the per-set "done" checkbox in the Log form to mark that set complete. Absent/`false` on older sets and on sets never checked; backwards compatible (it's just an extra key in the `exercises` jsonb, no migration). A transient `_prefilled` marker is used in-memory while logging (it flags a set whose empty fields were auto-filled from the last session so they aren't re-filled after you clear them) and is stripped before a session is saved, so it never appears in stored data.
+
+The four types:
 
 ### Warmup set
 ```json

@@ -1,7 +1,21 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.30.0 — Challenge grid (view-only prototype) in Stats
+  HYBRID TRAINER v0.31.0 — Lift logging: pre-filled sets + "done" checkboxes
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.31.0:
+    - Lift Log: instead of showing last time's numbers as a gray placeholder,
+      empty sets are now PRE-FILLED with what you did last time for that exercise
+      (or the template's values, which already filled). The value is written into
+      the saved data, not just shown. Each set fills once; a field you clear is
+      not re-filled; pre-fill is skipped while editing a saved session and never
+      overwrites a value already there. prefillExercisesFromLast().
+    - Each set row now has a "done" CHECKBOX — tick it to mark that set complete.
+      It tints the row and persists. New per-set field `set.done` (optional,
+      backwards compatible: old sets just don't have it). toggleSetDone().
+    - Schema 15 -> 16 for the new `set.done` field (exercises is jsonb, so NO DB
+      migration — the field rides along). The transient `_prefilled` marker is
+      stripped before save so it never reaches history/cloud. APP_VERSION v0.31.0.
 
   What's new in v0.30.0:
     - PROTOTYPE: a "Challenge" grid at the top of the Stats tab. RIGHT NOW it
@@ -464,14 +478,17 @@
   .set-row.myorep { background: var(--myorep-bg); border-left: 3px solid var(--accent); padding-left: 6px; }
   .set-row.drop { background: var(--drop-bg); border-left: 3px solid var(--info); padding-left: 6px; }
   .set-table-header.no-intensity, .set-row.working.no-intensity, .set-row.warmup.no-intensity {
-    grid-template-columns: 28px 1fr 1fr 28px 28px 28px;
+    grid-template-columns: 24px 28px 1fr 1fr 28px 28px 28px;
   }
   .set-table-header.with-intensity, .set-row.working.with-intensity, .set-row.warmup.with-intensity {
-    grid-template-columns: 28px 1fr 1fr 1fr 28px 28px 28px;
+    grid-template-columns: 24px 28px 1fr 1fr 1fr 28px 28px 28px;
   }
   .set-row.myorep, .set-row.drop {
-    grid-template-columns: 36px 1fr 28px 28px 28px;
+    grid-template-columns: 24px 36px 1fr 28px 28px 28px;
   }
+  .set-done { width: 18px; height: 18px; margin: 0 auto; accent-color: var(--accent); cursor: pointer; }
+  .set-row.done { box-shadow: inset 3px 0 0 var(--accent); }
+  .set-row.done input:not(.set-done) { opacity: 0.55; }
   .set-label {
     font-size: 0.8rem; font-weight: 600; color: var(--text-muted);
     text-align: center; font-family: ui-monospace, monospace;
@@ -784,7 +801,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.30.0</small>
+      <small>v0.31.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1085,7 +1102,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.30.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.31.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1122,8 +1139,8 @@
 // no migration is gated on it. (Bumped here in app v0.23.0.)
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
-const SCHEMA_VERSION = 15;
-const APP_VERSION = 'v0.30.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const SCHEMA_VERSION = 16;
+const APP_VERSION = 'v0.31.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -2675,6 +2692,7 @@ function renderExercises() {
     }
     return;
   }
+  prefillExercisesFromLast();
   // Inline "+ Add exercise" at the bottom of the column. Replaces the old
   // floating "+" button, which was easy to miss on desktop.
   area.innerHTML = exs.map((ex, i) => renderExerciseBlock(ex, i, exs.length)).join('') +
@@ -2703,7 +2721,7 @@ function renderExerciseBlock(ex, i, total) {
       ${hint ? `<div class="last-session-hint">${escapeHtml(hint)}</div>` : ''}
       ${hasTabularSets ? `
         <div class="set-table-header ${gridClass}">
-          <div>#</div><div>Weight</div><div>Reps</div>${intensityHeader}<div></div><div></div><div></div>
+          <div>✓</div><div>#</div><div>Weight</div><div>Reps</div>${intensityHeader}<div></div><div></div><div></div>
         </div>` : ''}
       <div id="sets-${i}">
         ${ex.sets.map((set, si) => renderSetRow(i, si, set, last)).join('')}
@@ -2740,9 +2758,13 @@ function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
   const downBtn = `<button class="reorder-btn" onclick="moveSet(${exIdx},${setIdx},1)" ${downDisabled}>▼</button>`;
   const delBtn = `<button class="btn-icon" onclick="removeSet(${exIdx},${setIdx})">×</button>`;
 
+  const doneBox = `<input type="checkbox" class="set-done" ${set.done ? 'checked' : ''} onchange="toggleSetDone(${exIdx},${setIdx},this)" title="Mark this set done">`;
+  const doneCls = set.done ? ' done' : '';
+
   if (set.type === 'warmup') {
     return `
-      <div class="set-row warmup ${gridClass}">
+      <div class="set-row warmup ${gridClass}${doneCls}">
+        ${doneBox}
         <span class="set-label">w</span>
         <input type="number" inputmode="decimal" placeholder="${hintW||'-'}" value="${escapeHtml(set.weight||'')}"
           oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
@@ -2758,7 +2780,8 @@ function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
           oninput="updateSet(${exIdx},${setIdx},'${settings.intensity}',this.value)">`
       : '';
     return `
-      <div class="set-row working ${gridClass}">
+      <div class="set-row working ${gridClass}${doneCls}">
+        ${doneBox}
         <span class="set-label">${countWorkingBefore(exIdx, setIdx)}</span>
         <input type="number" inputmode="decimal" placeholder="${hintW||'-'}" value="${escapeHtml(set.weight||'')}"
           oninput="updateSet(${exIdx},${setIdx},'weight',this.value)">
@@ -2770,7 +2793,8 @@ function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
   }
   if (set.type === 'myorep') {
     return `
-      <div class="set-row myorep">
+      <div class="set-row myorep${doneCls}">
+        ${doneBox}
         <span class="set-label">MYO</span>
         <input type="text" class="seq-input" placeholder="${hintSeq||'wt × 14, 8, 3, 2'}" value="${escapeHtml(set.sequence||'')}"
           oninput="updateSet(${exIdx},${setIdx},'sequence',this.value)">
@@ -2779,7 +2803,8 @@ function renderSetRow(exIdx, setIdx, set, lastExerciseData) {
   }
   if (set.type === 'drop') {
     return `
-      <div class="set-row drop">
+      <div class="set-row drop${doneCls}">
+        ${doneBox}
         <span class="set-label">DROP</span>
         <input type="text" class="seq-input" placeholder="${hintSeq||'35x8, 25x7, 15x11'}" value="${escapeHtml(set.sequence||'')}"
           oninput="updateSet(${exIdx},${setIdx},'sequence',this.value)">
@@ -2842,6 +2867,44 @@ function moveSet(exIdx, setIdx, dir) {
 function updateSet(exIdx, setIdx, field, value) {
   state.currentSession.exercises[exIdx].sets[setIdx][field] = value;
   saveState();
+}
+function toggleSetDone(exIdx, setIdx, el) {
+  state.currentSession.exercises[exIdx].sets[setIdx].done = el.checked;
+  const row = el.closest('.set-row');
+  if (row) row.classList.toggle('done', el.checked);
+  saveState();
+}
+
+// Pre-fill empty sets with what you did last time for this exercise, writing the
+// values into state so they actually save (replaces the old gray placeholder).
+// Each set is filled at most once (_prefilled flag) so a field you deliberately
+// clear is never re-filled. Skipped while editing a saved session, and never
+// overwrites a value already present (e.g. from a loaded template).
+function prefillExercisesFromLast() {
+  if (state.editingHistoryIndex !== null) return;
+  let changed = false;
+  state.currentSession.exercises.forEach(ex => {
+    const last = findLastExerciseData(ex.name);
+    if (!last || !last.sets) return; // no name / no history yet — try again next render
+    ex.sets.forEach((set, si) => {
+      if (set._prefilled) return;
+      const h = last.sets[si];
+      if (h && h.type === set.type) {
+        if (set.type === 'warmup' || set.type === 'working') {
+          if (!set.weight && h.weight) { set.weight = h.weight; changed = true; }
+          if (!set.reps && h.reps) { set.reps = h.reps; changed = true; }
+          if (set.type === 'working' && settings.intensity !== 'off') {
+            const hv = h[settings.intensity] || h.rpe || h.rir;
+            if (!set[settings.intensity] && hv) { set[settings.intensity] = hv; changed = true; }
+          }
+        } else if (set.type === 'myorep' || set.type === 'drop') {
+          if (!set.sequence && h.sequence) { set.sequence = h.sequence; changed = true; }
+        }
+      }
+      set._prefilled = true;
+    });
+  });
+  if (changed) saveState();
 }
 function updateExerciseNotes(i, v) {
   state.currentSession.exercises[i].notes = v;
@@ -3653,6 +3716,9 @@ async function finishAndSave() {
 async function saveSessionToHistory(opts) {
   opts = opts || {};
   const s = state.currentSession;
+
+  // Drop the transient prefill marker so it never lands in history/cloud.
+  (s.exercises || []).forEach(ex => (ex.sets || []).forEach(set => { delete set._prefilled; }));
 
   // ---- BLOCKERS: nothing actually blocks, but these are first-line confirms ----
   if (s.type === 'lifts' && s.exercises.length === 0) {
