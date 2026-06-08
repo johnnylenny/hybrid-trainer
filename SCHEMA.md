@@ -511,9 +511,21 @@ The first **cross-user** data in the app. NOT tied to `SCHEMA_VERSION` (they don
 
 Two SECURITY DEFINER helper functions back the RLS so policies don't read `friendships` under RLS: `are_friends(a,b)` (true only for an **accepted** link, either direction — used by Phase 2/3) and `has_friend_link(a,b)` (true for **any** link, so you can see a pending requester's name). RLS: `profiles` is selectable by yourself or anyone you have a link with (`has_friend_link`); `friendships` rows are visible/insertable/updatable/deletable only by the two parties (only the addressee may flip to `accepted`; either party may delete to cancel/decline/unfriend). Adding a friend goes through `request_friend_by_code(p_code)` / `request_friend_by_email(p_email)` SECURITY DEFINER RPCs (the requester doesn't know the target's `user_id`); the email RPC returns a generic reply on not-found/success so the public anon key can't enumerate accounts.
 
+### `training_days` table (app v0.33.0 — Social Phase 2)
+
+The only **cross-user training signal**. One row per `(user_id, date, type)` — "this person did a `lifts`/`run`/`conditioning` session on this date." Deliberately holds **nothing else**: no weights, paces, notes, bodyweight, or exercise detail. The full `sessions` table is never exposed to friends; this narrow table is the entire shareable surface, which is the privacy design. NOT tied to `SCHEMA_VERSION` (standalone table). Full DDL + RLS in `_local/migrations/social-phase2.sql`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | uuid | FK to `auth.users`, cascade. Part of PK. |
+| `date` | date | YYYY-MM-DD. Part of PK. |
+| `type` | text | `lifts` / `run` / `conditioning`. Part of PK. |
+
+Primary key `(user_id, date, type)`. RLS select: your own rows **or** an accepted friend's (`are_friends(auth.uid(), user_id)` from Phase 1); write (insert/update/delete): your own rows only. The client keeps it in sync as a pure function of `history` — a row exists iff at least one session of that date+type exists — updated on every save/delete/edit, plus a one-time backfill of existing history on upgrade.
+
 ### Row Level Security
 
-The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) are the first tables with **cross-user** read access, gated by accepted/linked friendship via the `are_friends`/`has_friend_link` helpers — see the section just above.
+The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) and `training_days` (v0.33.0) are the tables with **cross-user** read access, gated by accepted/linked friendship via the `are_friends`/`has_friend_link` helpers — see the sections just above.
 
 ## Local ↔ Cloud mapping
 

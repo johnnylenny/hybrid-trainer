@@ -1,7 +1,30 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.32.0 — Friends (Phase 1 of the real challenge feature)
+  HYBRID TRAINER v0.33.0 — Challenge grid wired to real friends (Social Phase 2)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.33.0:
+    - The Stats challenge grid now shows YOUR ACCEPTED FRIENDS as real rows, not
+      just you. Each friend's green dots come from a new privacy-safe signal —
+      NOT their full sessions.
+    - New Supabase table `training_days` = (user_id, date, type) ONLY. "This
+      person did a lifts/run/conditioning session on this date" — no weights,
+      paces, notes, or bodyweight. Accepted friends can read it (RLS via the
+      are_friends() helper from Phase 1); the full `sessions` table stays private.
+      That table separation IS the privacy boundary.
+    - The signal is kept in sync as a pure function of history: `syncTrainingDayFor`
+      (date,type) upserts when a session of that date+type exists, deletes when the
+      last one is removed. Hooked into save / delete / edit (edits resync the old
+      AND new date+type). A one-time `backfillTrainingDays()` bulk-pushes existing
+      history on first load of this version (guarded by TD_BACKFILL_KEY), and runs
+      after batch imports too. New 'trainingDay' op in the retry queue.
+    - Grid wiring: `loadChallengeFriends()` pulls accepted friends' profiles +
+      training_days for the visible window when Stats opens, caches them, and the
+      grid renders you-first then re-renders with friends. `trainedOnDay` now reads
+      a per-person Set of "date|type" keys (`buildDaysSet`).
+    - REQUIRES the Phase 2 migration: _local/migrations/social-phase2.sql, run once
+      in the Supabase SQL editor. No SCHEMA_VERSION change (standalone table) —
+      stays 16. APP_VERSION v0.33.0. Comments are still localStorage (Phase 3).
 
   What's new in v0.32.0:
     - FRIENDS (Settings -> Friends). First step of turning the Stats challenge
@@ -833,7 +856,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.32.0</small>
+      <small>v0.33.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1139,7 +1162,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.32.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.33.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1177,7 +1200,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.32.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.33.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1809,6 +1832,7 @@ function emptyExercise(name = '') { return { name, sets: [], notes: '' }; }
 let appMode = 'unauthenticated';
 const LOCAL_ONLY_KEY = 'hybridTrainerLocalOnly'; // remembers if user chose local-only
 const SYNC_QUEUE_KEY = 'hybridTrainerSyncQueue'; // failed cloud writes awaiting retry
+const TD_BACKFILL_KEY = 'ht_training_days_backfilled_v1'; // one-time training_days backfill done
 
 // Sync status: 'idle' | 'syncing' | 'error'
 let syncStatus = 'idle';
@@ -2001,6 +2025,8 @@ async function cloudPullAll() {
     saveState(); // cache locally
     saveSettings();
     setSyncStatus('idle');
+    // One-time backfill of the friends-grid signal from existing history.
+    if (!localStorage.getItem(TD_BACKFILL_KEY)) backfillTrainingDays();
     return { success: true };
   } catch (e) {
     console.error('cloudPullAll failed:', e);
@@ -2076,6 +2102,12 @@ function performSyncOp(op) {
   if (op.kind === 'template')       return sb.from('templates').upsert(templateToRow(op.data, currentUser.id));
   if (op.kind === 'deleteTemplate') return sb.from('templates').delete().eq('id', op.id);
   if (op.kind === 'settings')       return sb.from('user_settings').upsert(settingsToRow(settings, currentUser.id));
+  if (op.kind === 'trainingDay') {
+    // The shareable training signal. `present` = a session of this date+type
+    // still exists in history (upsert it) vs the last one was removed (delete).
+    if (op.present) return sb.from('training_days').upsert({ user_id: currentUser.id, date: op.date, type: op.type });
+    return sb.from('training_days').delete().eq('user_id', currentUser.id).eq('date', op.date).eq('type', op.type);
+  }
   return Promise.resolve({ error: null });
 }
 // Attempt a write immediately; queue it for retry if it fails.
@@ -2143,6 +2175,40 @@ function cloudPushTemplate(template) {
   if (appMode !== 'cloud' || !sb || !currentUser) return;
   if (!template.id) template.id = crypto.randomUUID();
   return trySync({ kind: 'template', entity: 'template', id: template.id, data: _cloneForSync(template) });
+}
+// ---- training_days: the privacy-safe signal that feeds the friends grid ----
+// A row is a pure function of history: present if ANY session shares this
+// date+type, absent otherwise. Call after any save/delete that touches a
+// (date, type). Queued like every other write (deduped by date|type).
+function syncTrainingDayFor(date, type) {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  if (!date || !type) return;
+  const present = state.history.some(h => h.date === date && h.type === type);
+  return trySync({ kind: 'trainingDay', entity: 'trainingDay', id: date + '|' + type, present: present, date: date, type: type });
+}
+// One bulk upsert of every distinct (date, type) in history. Used for the
+// one-time backfill on upgrade (guarded by TD_BACKFILL_KEY) and after batch
+// imports. Idempotent; never deletes (history only grows the set).
+async function backfillTrainingDays() {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  const seen = new Set();
+  const rows = [];
+  state.history.forEach(h => {
+    if (!h.date || !h.type) return;
+    const k = h.date + '|' + h.type;
+    if (seen.has(k)) return;
+    seen.add(k);
+    rows.push({ user_id: currentUser.id, date: h.date, type: h.type });
+  });
+  try {
+    if (rows.length) {
+      const { error } = await sb.from('training_days').upsert(rows);
+      if (error) throw error;
+    }
+    try { localStorage.setItem(TD_BACKFILL_KEY, '1'); } catch (e) {}
+  } catch (e) {
+    console.warn('training_days backfill failed (will retry next load):', e.message || e);
+  }
 }
 function cloudDeleteTemplate(templateId) {
   if (appMode !== 'cloud' || !sb || !currentUser || !templateId) return;
@@ -3758,6 +3824,12 @@ async function saveSessionToHistory(opts) {
   // Drop the transient prefill marker so it never lands in history/cloud.
   (s.exercises || []).forEach(ex => (ex.sets || []).forEach(set => { delete set._prefilled; }));
 
+  // For the friends grid signal: remember this session's date+type, and (if
+  // editing) the ORIGINAL date+type, so we can resync both after the save.
+  const newDT = { date: s.date, type: s.type };
+  const _editOld = state.editingHistoryIndex !== null ? state.history[state.editingHistoryIndex] : null;
+  const oldDT = _editOld ? { date: _editOld.date, type: _editOld.type } : null;
+
   // ---- BLOCKERS: nothing actually blocks, but these are first-line confirms ----
   if (s.type === 'lifts' && s.exercises.length === 0) {
     if (!await modalConfirm('No exercises logged. Save anyway?')) return;
@@ -3847,6 +3919,12 @@ async function saveSessionToHistory(opts) {
   saveState();
   // Background push to cloud (no-op in local mode)
   if (savedSession) cloudPushSession(savedSession);
+  // Update the friends-grid signal for the new date+type, and the old one if
+  // an edit moved the session to a different date/type (so a stale dot clears).
+  syncTrainingDayFor(newDT.date, newDT.type);
+  if (oldDT && (oldDT.date !== newDT.date || oldDT.type !== newDT.type)) {
+    syncTrainingDayFor(oldDT.date, oldDT.type);
+  }
   renderLog();
 }
 async function clearSession() {
@@ -4008,6 +4086,9 @@ async function deleteHistory(i) {
   }
   saveState();
   if (removed && removed.id) cloudDeleteSession(removed.id);
+  // Recompute the friends-grid signal for that day+type: it clears only if this
+  // was the last session of that type on that date.
+  if (removed) syncTrainingDayFor(removed.date, removed.type);
   renderHistory();
 }
 
@@ -4179,14 +4260,49 @@ function lastNWeeks(n) {
   }
   return out;
 }
-// Did this person do the chosen type on this date? For now there's only you,
-// read from real history. Future friends will plug their pulled sessions in here.
+// Each person carries a `days` Set of "date|type" keys. For you it's built from
+// real history; for friends it's built from their pulled training_days rows
+// (date+type only — never full session detail). v0.33.0.
+function buildDaysSet(history) {
+  const s = new Set();
+  (history || []).forEach(h => { if (h.date && h.type) s.add(h.date + '|' + h.type); });
+  return s;
+}
 function trainedOnDay(person, modality, dateStr) {
-  const hist = person.you ? state.history : (person.history || []);
-  return hist.some(s => s.type === modality && s.date === dateStr);
+  return person.days ? person.days.has(dateStr + '|' + modality) : false;
 }
 function daysTrainedInWeek(person, modality, dates) {
   return dates.reduce((c, dt) => c + (trainedOnDay(person, modality, dt) ? 1 : 0), 0);
+}
+
+// Accepted friends + their training-day signal for the visible window. Cached so
+// refreshChallenge() (dropdown changes) re-renders without re-fetching. Pulled
+// when the Stats tab opens. Only date+type crosses the wire, gated by RLS.
+let challengeFriends = []; // [{ userId, name, avatar, you:false, days:Set }]
+async function loadChallengeFriends() {
+  challengeFriends = [];
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  try {
+    await loadFriends(); // fills friendsCache.accepted with { userId, name, avatar }
+    const accepted = friendsCache.accepted;
+    if (!accepted.length) return;
+    const ids = accepted.map(p => p.userId);
+    const minDate = lastNWeeks(CHALLENGE_WEEKS)[0].dates[0]; // covers Day + Week views
+    const { data, error } = await sb.from('training_days')
+      .select('user_id, date, type').in('user_id', ids).gte('date', minDate);
+    if (error) throw error;
+    const byUser = {};
+    (data || []).forEach(r => {
+      (byUser[r.user_id] = byUser[r.user_id] || new Set()).add(r.date + '|' + r.type);
+    });
+    challengeFriends = accepted.map(p => ({
+      userId: p.userId, name: p.name, avatar: p.avatar, you: false,
+      days: byUser[p.userId] || new Set()
+    }));
+  } catch (e) {
+    console.warn('loadChallengeFriends failed:', e.message || e);
+    challengeFriends = [];
+  }
 }
 
 function challengeCardHtml() {
@@ -4194,9 +4310,9 @@ function challengeCardHtml() {
   const noun = mod.label.toLowerCase().replace(/s$/, ''); // "lift" / "run" / "conditioning"
   const view = challengeState.view;
   const goal = getChallengeGoal();
-  const me = { name: settings.displayName || 'You', avatar: settings.avatar || '', you: true };
-  // Just you for now; friends become extra rows once the backend exists.
-  const people = [me];
+  const me = { name: settings.displayName || 'You', avatar: settings.avatar || '', you: true, days: buildDaysSet(state.history) };
+  // You first, then your accepted friends (loaded async when Stats opens).
+  const people = [me].concat(challengeFriends);
 
   const nameCell = (p) => {
     const ava = p.avatar ? '<span class="cg-ava">' + avatarEmoji(p.avatar) + '</span>' : '';
@@ -4248,12 +4364,20 @@ function challengeCardHtml() {
   const goalSel = '<select aria-label="Weekly goal" onchange="setChallengeGoal(this.value)">' +
     [1, 2, 3, 4, 5, 6, 7].map(n => '<option value="' + n + '"' + (n === goal ? ' selected' : '') + '>Goal: ' + n + '/wk</option>').join('') + '</select>';
 
+  let note;
+  if (appMode !== 'cloud' || !currentUser) {
+    note = 'Sign in and add friends (Settings → Friends) to compare training here. Your goal and comments save to this browser only.';
+  } else if (challengeFriends.length) {
+    note = 'You and your friends. A dot only means a session of this type happened that day — no weights, paces, or notes are shared. Your goal and comments save to this browser only.';
+  } else {
+    note = 'Just you so far. Add friends in Settings → Friends and they show up here. Your goal and comments save to this browser only.';
+  }
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + mod.name + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
     '<div class="cg-controls">' + modSel + viewSel + goalSel + '</div>' +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
-    '<div class="cg-note">Just you for now — friends will show up here once the friends/integration setup is built. Your goal and comments save to this browser only.</div>' +
+    '<div class="cg-note">' + note + '</div>' +
     '<div class="cg-comments" id="cg-comments"></div>' +
     '<div class="cg-comment-box"><input type="text" id="cg-comment-input" placeholder="Leave a comment..." maxlength="280" onkeydown="if(event.key===&quot;Enter&quot;)addChallengeComment()"><button class="modal-btn primary" onclick="addChallengeComment()">Post</button></div>' +
     '</div>';
@@ -4304,6 +4428,10 @@ function renderStats() {
   destroyCharts();
   const container = document.getElementById('stats-content');
   const challengeHtml = challengeCardHtml();
+  // Pull friends' training days in the background, then repaint just the grid.
+  // The synchronous innerHTML below lands first, so #challenge-card exists by
+  // the time this resolves. No-op in local mode.
+  if (appMode === 'cloud' && currentUser) loadChallengeFriends().then(refreshChallenge);
 
   if (typeof Chart === 'undefined') {
     container.innerHTML = challengeHtml + '<div class="card"><p class="muted">Charts need an internet connection to load the charting library. Reconnect and reopen this tab.</p></div>';
@@ -4878,6 +5006,7 @@ async function importHevyCsv() {
         renderLog();
         if (typeof renderHistory === 'function') renderHistory();
         for (const s of fresh) cloudPushSession(s);
+        backfillTrainingDays(); // push the friends-grid signal for the imported days
         showToast(`Imported ${fresh.length} workout(s) from Hevy.`, 'success');
       } catch (err) {
         showToast('Could not read that file: ' + err.message, 'error');
@@ -4998,6 +5127,7 @@ async function mergeImportedSessions(rawSessions) {
   renderLog();
   if (typeof renderHistory === 'function') renderHistory();
   for (const s of fresh) cloudPushSession(s);
+  backfillTrainingDays(); // push the friends-grid signal for the imported days
   showToast(`Added ${fresh.length} workout(s) to your history.`, 'success');
   return fresh.length;
 }
