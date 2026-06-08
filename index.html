@@ -1,7 +1,28 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.31.0 — Lift logging: pre-filled sets + "done" checkboxes
+  HYBRID TRAINER v0.32.0 — Friends (Phase 1 of the real challenge feature)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.32.0:
+    - FRIENDS (Settings -> Friends). First step of turning the Stats challenge
+      grid from a solo prototype into a real multi-person feature. You get a
+      shareable friend CODE; add friends by their code (preferred) or by email;
+      accept / decline incoming requests; remove friends. The grid itself is
+      NOT wired to friends yet — that's Phase 2 (v0.33.0).
+    - First CROSS-USER data in the app. New Supabase tables: `profiles` (your
+      shareable identity: name + avatar + friend_code, kept separate from the
+      private user_settings) and `friendships` (pairwise pending/accepted rows).
+      Privacy is enforced by RLS + the are_friends()/has_friend_link() helpers;
+      the full `sessions` table is NEVER exposed to friends. Adding by code/email
+      goes through two SECURITY DEFINER RPCs (request_friend_by_code / _by_email);
+      the email one returns a generic reply so the anon key can't probe accounts.
+    - REQUIRES the Phase 1 migration: _local/migrations/social-phase1.sql, run
+      once in the Supabase SQL editor. Until it's run, the Friends UI shows but
+      actions fail gracefully with a toast. No SCHEMA_VERSION change (these are
+      standalone tables, not a change to the workout/export shape) — stays 16.
+      Client: ensureProfile / generateFriendCode / loadFriends / renderFriends /
+      sendFriendRequestByCode / sendFriendRequestByEmail / acceptFriendRequest /
+      declineOrRemoveFriend. APP_VERSION v0.32.0.
 
   What's new in v0.31.0:
     - Lift Log: instead of showing last time's numbers as a gray placeholder,
@@ -597,6 +618,17 @@
   .cg-comment .cg-c-text { color: var(--text-muted); margin-top: 1px; }
   .cg-comment-box { display: flex; gap: 8px; margin-top: 8px; }
   .cg-comment-box input { flex: 1; }
+  /* Friends (Settings) */
+  .friend-code-display { display: flex; align-items: center; gap: 8px; }
+  .friend-code-display code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 1rem; font-weight: 700; letter-spacing: 1px; color: var(--accent); background: var(--surface-2); padding: 4px 10px; border-radius: 6px; }
+  .friend-add { display: flex; gap: 8px; margin-bottom: 8px; }
+  .friend-add input { flex: 1; min-width: 0; }
+  .friends-lists { margin-top: 4px; }
+  .friend-group-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin: 14px 0 6px; }
+  .friend-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .friend-who { font-weight: 600; color: var(--text); }
+  .friend-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+  .friend-actions button { padding: 5px 12px; font-size: 0.8rem; }
   @supports (padding: env(safe-area-inset-bottom)) {
     body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
@@ -801,7 +833,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.31.0</small>
+      <small>v0.32.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -986,6 +1018,11 @@
     </div>
   </div>
 
+  <h2>Friends</h2>
+  <div class="card" id="friends-card">
+    <div id="friends-content"></div>
+  </div>
+
   <h2>Appearance</h2>
   <div class="card">
     <div class="setting-row">
@@ -1102,7 +1139,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.31.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.32.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1140,7 +1177,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.31.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.32.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1256,6 +1293,7 @@ async function onSignedIn() {
   appMode = 'cloud';
   localStorage.removeItem(LOCAL_ONLY_KEY); // they signed in, no longer local-only
   setSyncStatus('syncing');
+  ensureProfile(); // make sure they have a shareable profile + friend code (fire-and-forget)
 
   // Read what's in the cloud first (without overwriting state yet)
   let cloudSessions = [];
@@ -4546,6 +4584,9 @@ function renderSettings() {
   const nameInput = document.getElementById('set-displayname');
   if (nameInput) nameInput.value = settings.displayName || '';
   renderAvatarPicker();
+  // Friends: paint from cache immediately, then pull fresh data (cloud only).
+  renderFriends();
+  if (appMode === 'cloud' && currentUser) refreshFriendsUI();
 }
 
 // Build the 5 avatar option buttons. Clicking one updates settings and refreshes header.
@@ -4565,6 +4606,7 @@ function pickAvatar(key) {
   else settings.avatar = key;
   saveSettings();
   cloudPushSettings();
+  ensureProfile(); // keep the friends-facing profile avatar in sync
   renderAvatarPicker();
   updateAuthBadge();
 }
@@ -4572,6 +4614,7 @@ function updateSetting(key, value) {
   settings[key] = value;
   saveSettings();
   cloudPushSettings();
+  if (key === 'displayName') ensureProfile(); // keep the friends-facing profile name in sync
 }
 async function nukeAllData() {
   const cloudNote = (appMode === 'cloud')
@@ -5172,6 +5215,236 @@ async function submitFeedback() {
   } finally {
     sendBtn.disabled = false;
   }
+}
+
+// =====================================================================
+// FRIENDS (social, v0.32.0) -> Supabase `profiles` + `friendships`.
+// First cross-user data in the app. Your `profiles` row is a shareable
+// identity (name + avatar + a friend code); friends are pairwise rows in
+// `friendships`. Cross-user reads are gated by RLS + the are_friends() /
+// has_friend_link() helpers - the full `sessions` table is NEVER exposed.
+// Needs the Phase 1 migration (_local/migrations/social-phase1.sql); until
+// that's run these fail gracefully with a toast / a console warning.
+// =====================================================================
+let myFriendCode = '';                                   // cached from ensureProfile()
+let friendsCache = { accepted: [], incoming: [], outgoing: [] };
+
+// Easy-to-read code: no 0/O/1/I, so it survives being read aloud or texted.
+function generateFriendCode() {
+  const alpha = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const arr = new Uint32Array(6);
+  crypto.getRandomValues(arr);
+  let s = '';
+  for (let i = 0; i < 6; i++) s += alpha[arr[i] % alpha.length];
+  return 'HT-' + s;
+}
+
+// Make sure the signed-in user has a profile row. Idempotent: keeps
+// display_name + avatar in sync and assigns a friend_code exactly once
+// (retrying on the rare code collision). Called on sign-in and whenever
+// the profile name/avatar changes.
+async function ensureProfile() {
+  if (!sb || !currentUser) return;
+  try {
+    const { data, error } = await sb.from('profiles')
+      .select('friend_code').eq('user_id', currentUser.id).maybeSingle();
+    if (error) throw error;
+    if (data && data.friend_code) {
+      myFriendCode = data.friend_code;
+      await sb.from('profiles').update({
+        display_name: settings.displayName || null,
+        avatar: settings.avatar || null
+      }).eq('user_id', currentUser.id);
+      return;
+    }
+    // No profile yet: insert with a fresh code, retry if the code clashes.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = generateFriendCode();
+      const { error: insErr } = await sb.from('profiles').insert({
+        user_id: currentUser.id,
+        display_name: settings.displayName || null,
+        avatar: settings.avatar || null,
+        friend_code: code
+      });
+      if (!insErr) { myFriendCode = code; return; }
+      if (insErr.code === '23505') {
+        // Unique violation: either the code clashed, or a profile row was
+        // created concurrently. If a row now exists, use its code; else retry.
+        const { data: again } = await sb.from('profiles')
+          .select('friend_code').eq('user_id', currentUser.id).maybeSingle();
+        if (again && again.friend_code) { myFriendCode = again.friend_code; return; }
+        continue;
+      }
+      throw insErr;
+    }
+  } catch (e) {
+    console.warn('ensureProfile skipped (migration not run yet?):', e.message || e);
+  }
+}
+
+// Pull every friendship row I'm part of, plus the other person's profile, and
+// split into accepted / incoming-request / outgoing-request buckets.
+async function loadFriends() {
+  friendsCache = { accepted: [], incoming: [], outgoing: [] };
+  if (!sb || !currentUser) return friendsCache;
+  const me = currentUser.id;
+  const { data: rows, error } = await sb.from('friendships')
+    .select('id, requester_id, addressee_id, status');
+  if (error) throw error;
+  const otherIds = (rows || []).map(r => r.requester_id === me ? r.addressee_id : r.requester_id);
+  const profById = {};
+  if (otherIds.length) {
+    const { data: profs } = await sb.from('profiles')
+      .select('user_id, display_name, avatar, friend_code').in('user_id', otherIds);
+    (profs || []).forEach(p => { profById[p.user_id] = p; });
+  }
+  (rows || []).forEach(r => {
+    const otherId = r.requester_id === me ? r.addressee_id : r.requester_id;
+    const prof = profById[otherId] || {};
+    const person = {
+      friendshipId: r.id,
+      userId: otherId,
+      name: prof.display_name || 'Hybrid athlete',
+      avatar: prof.avatar || ''
+    };
+    if (r.status === 'accepted') friendsCache.accepted.push(person);
+    else if (r.addressee_id === me) friendsCache.incoming.push(person);
+    else friendsCache.outgoing.push(person);
+  });
+  return friendsCache;
+}
+
+// Ensure profile + (re)load friends, then repaint the Settings section.
+async function refreshFriendsUI() {
+  await ensureProfile();
+  try { await loadFriends(); } catch (e) { console.warn('loadFriends failed:', e.message || e); }
+  renderFriends();
+}
+
+async function sendFriendRequestByCode() {
+  const inp = document.getElementById('friend-code-input');
+  if (!inp) return;
+  const code = (inp.value || '').trim();
+  if (!code) return;
+  if (!sb || !currentUser) { showToast('Sign in to add friends.', 'error'); return; }
+  try {
+    const { data, error } = await sb.rpc('request_friend_by_code', { p_code: code });
+    if (error) throw error;
+    showToast(data || 'Request sent.', 'info');
+    inp.value = '';
+    refreshFriendsUI();
+  } catch (e) {
+    showToast('Could not send request: ' + (e.message || e), 'error');
+  }
+}
+
+async function sendFriendRequestByEmail() {
+  const inp = document.getElementById('friend-email-input');
+  if (!inp) return;
+  const email = (inp.value || '').trim();
+  if (!email) return;
+  if (!sb || !currentUser) { showToast('Sign in to add friends.', 'error'); return; }
+  try {
+    const { data, error } = await sb.rpc('request_friend_by_email', { p_email: email });
+    if (error) throw error;
+    showToast(data || 'Request sent.', 'info');
+    inp.value = '';
+    refreshFriendsUI();
+  } catch (e) {
+    showToast('Could not send request: ' + (e.message || e), 'error');
+  }
+}
+
+async function acceptFriendRequest(friendshipId) {
+  if (!sb) return;
+  try {
+    const { error } = await sb.from('friendships')
+      .update({ status: 'accepted' }).eq('id', friendshipId);
+    if (error) throw error;
+    showToast('Friend added.', 'success');
+    refreshFriendsUI();
+  } catch (e) { showToast('Could not accept: ' + (e.message || e), 'error'); }
+}
+
+// Used for declining an incoming request, cancelling a sent one, and unfriending.
+async function declineOrRemoveFriend(friendshipId, isAccepted) {
+  if (!sb) return;
+  if (isAccepted) {
+    const all = [].concat(friendsCache.accepted, friendsCache.incoming, friendsCache.outgoing);
+    const p = all.find(x => x.friendshipId === friendshipId);
+    const ok = await modalConfirm('Remove ' + (p ? p.name : 'this friend') + '? You can add them again later.',
+      { okText: 'Remove', danger: true });
+    if (!ok) return;
+  }
+  try {
+    const { error } = await sb.from('friendships').delete().eq('id', friendshipId);
+    if (error) throw error;
+    showToast(isAccepted ? 'Friend removed.' : 'Request dismissed.', 'info');
+    refreshFriendsUI();
+  } catch (e) { showToast('Could not update: ' + (e.message || e), 'error'); }
+}
+
+async function copyFriendCode() {
+  if (!myFriendCode) return;
+  try { await navigator.clipboard.writeText(myFriendCode); showToast('Code copied.', 'success'); }
+  catch (e) { showToast('Your code is ' + myFriendCode, 'info'); }
+}
+
+// Paint the Friends section of Settings from friendsCache. Signed-out users
+// get a prompt instead (friends only exist in cloud mode).
+function renderFriends() {
+  const box = document.getElementById('friends-content');
+  if (!box) return;
+  if (appMode !== 'cloud' || !currentUser) {
+    box.innerHTML = '<p class="muted">Sign in to add friends and compare training consistency. Friends are tied to your account.</p>';
+    return;
+  }
+  const f = friendsCache;
+  const codeRow =
+    '<div class="setting-row" style="align-items:flex-start"><div class="setting-label">' +
+      '<div class="title">Your friend code</div>' +
+      '<div class="desc">Share this so friends can add you.</div></div>' +
+    '<div class="setting-control" style="max-width:none"><div class="friend-code-display">' +
+      '<code>' + escapeHtml(myFriendCode || '...') + '</code>' +
+      '<button class="btn-secondary" onclick="copyFriendCode()"' + (myFriendCode ? '' : ' disabled') + '>Copy</button>' +
+    '</div></div></div>';
+
+  const addRow =
+    '<div class="setting-row" style="align-items:flex-start"><div class="setting-label">' +
+      '<div class="title">Add a friend</div>' +
+      '<div class="desc">By their code (preferred) or email. They get a request to accept.</div></div>' +
+    '<div class="setting-control" style="max-width:none">' +
+      '<div class="friend-add"><input type="text" id="friend-code-input" placeholder="HT-XXXXXX" maxlength="12" autocapitalize="characters" onkeydown="if(event.key===&quot;Enter&quot;)sendFriendRequestByCode()"><button class="modal-btn primary" onclick="sendFriendRequestByCode()">Add by code</button></div>' +
+      '<div class="friend-add"><input type="email" id="friend-email-input" placeholder="friend@example.com" maxlength="200" onkeydown="if(event.key===&quot;Enter&quot;)sendFriendRequestByEmail()"><button class="btn-secondary" onclick="sendFriendRequestByEmail()">Add by email</button></div>' +
+    '</div></div>';
+
+  const personLine = (p, actionsHtml) => {
+    const ava = p.avatar ? '<span class="cg-ava">' + avatarEmoji(p.avatar) + '</span>' : '';
+    return '<div class="friend-row"><span class="friend-who">' + ava + escapeHtml(p.name) + '</span>' +
+      '<span class="friend-actions">' + actionsHtml + '</span></div>';
+  };
+
+  let lists = '';
+  if (f.incoming.length) {
+    lists += '<div class="friend-group-label">Requests to you</div>' +
+      f.incoming.map(p => personLine(p,
+        '<button class="modal-btn primary" onclick="acceptFriendRequest(\'' + p.friendshipId + '\')">Accept</button>' +
+        '<button class="btn-secondary" onclick="declineOrRemoveFriend(\'' + p.friendshipId + '\', false)">Decline</button>')).join('');
+  }
+  if (f.outgoing.length) {
+    lists += '<div class="friend-group-label">Pending (sent)</div>' +
+      f.outgoing.map(p => personLine(p,
+        '<button class="btn-secondary" onclick="declineOrRemoveFriend(\'' + p.friendshipId + '\', false)">Cancel</button>')).join('');
+  }
+  lists += '<div class="friend-group-label">Friends</div>';
+  if (f.accepted.length) {
+    lists += f.accepted.map(p => personLine(p,
+      '<button class="btn-secondary" onclick="declineOrRemoveFriend(\'' + p.friendshipId + '\', true)">Remove</button>')).join('');
+  } else {
+    lists += '<p class="muted">No friends yet. Share your code, or add someone above.</p>';
+  }
+
+  box.innerHTML = codeRow + addRow + '<div class="friends-lists">' + lists + '</div>';
 }
 
 // ---- Paste-JSON import modal (front end for mergeImportedSessions) ----

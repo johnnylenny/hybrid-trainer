@@ -484,9 +484,36 @@ create policy "anyone can submit feedback"
   with check (user_id is null or auth.uid() = user_id);
 ```
 
+### `profiles` and `friendships` tables (app v0.32.0 — Social Phase 1)
+
+The first **cross-user** data in the app. NOT tied to `SCHEMA_VERSION` (they don't affect the export/session shape, same as `starter_templates`/`feedback`). Full DDL + RLS + RPCs live in `_local/migrations/social-phase1.sql`.
+
+`profiles` — your *shareable* identity, kept deliberately separate from the private `user_settings` (which holds units/theme and stays locked to its owner). This is the only table exposed to friends, and only name + avatar + code.
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | uuid (PK) | FK to `auth.users(id)`, cascade on delete. |
+| `display_name` | text | Mirrors the local `displayName` setting. |
+| `avatar` | text | Mirrors the local `avatar` setting. |
+| `friend_code` | text (unique, not null) | Shareable code (`HT-XXXXXX`), assigned once by the client. |
+| `created_at` | timestamptz | Server-set. |
+
+`friendships` — one row per relationship, pairwise. `status` is `pending` until the addressee accepts, then `accepted`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | `gen_random_uuid()`. |
+| `requester_id` | uuid | Who sent the request. FK to `auth.users`, cascade. |
+| `addressee_id` | uuid | Who received it. FK to `auth.users`, cascade. |
+| `status` | text | `pending` or `accepted`. |
+| `created_at` | timestamptz | Server-set. |
+| | | `unique (requester_id, addressee_id)`. |
+
+Two SECURITY DEFINER helper functions back the RLS so policies don't read `friendships` under RLS: `are_friends(a,b)` (true only for an **accepted** link, either direction — used by Phase 2/3) and `has_friend_link(a,b)` (true for **any** link, so you can see a pending requester's name). RLS: `profiles` is selectable by yourself or anyone you have a link with (`has_friend_link`); `friendships` rows are visible/insertable/updatable/deletable only by the two parties (only the addressee may flip to `accepted`; either party may delete to cancel/decline/unfriend). Adding a friend goes through `request_friend_by_code(p_code)` / `request_friend_by_email(p_email)` SECURITY DEFINER RPCs (the requester doesn't know the target's `user_id`); the email RPC returns a generic reply on not-found/success so the public anon key can't enumerate accounts.
+
 ### Row Level Security
 
-The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private).
+The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) are the first tables with **cross-user** read access, gated by accepted/linked friendship via the `are_friends`/`has_friend_link` helpers — see the section just above.
 
 ## Local ↔ Cloud mapping
 
