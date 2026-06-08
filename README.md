@@ -19,7 +19,8 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Warmups auto-sort before working sets
 - Reorder sets and exercises with up/down arrows
 - Auto-suggests exercise names you've used before
-- Shows last session's numbers as grayed-out targets to beat
+- Pre-fills each set with what you did last time for that exercise, so you start from real numbers instead of a blank form (adjust them as needed)
+- Check off each set with a "done" checkbox as you complete it
 - Optional RPE or RIR tracking (or off entirely)
 
 **Running**
@@ -36,6 +37,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 **Stats**
 - Five charts: bodyweight, per-exercise progression, estimated 1RM (Epley), run pace trend, weekly volume by type
+- Challenge view: a consistency grid for a single activity type (lift, run, or conditioning) with day and week views and a personal weekly goal — currently just your own data, as a preview of a future friends challenge
 
 **Sync across devices** (new in v0.10)
 - Sign up with email and password, or use a magic link
@@ -67,7 +69,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 ## Status
 
-v0.29 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
+v0.31 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. Lift logging pre-fills each set from your last session and lets you check sets off as done. A Stats "challenge" view shows your training consistency (a preview of a future friends feature). An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -106,7 +108,7 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 **Long-term:**
 - Conflict resolution for simultaneous edits on two devices
 - Strava export for completed sessions
-- Sharing with friends (read-only access to selected sessions)
+- Challenges with friends (the Stats challenge view is the first step — turning it into shared, multi-person accountability with comments)
 - Hub-style dashboard aggregating training load across modalities
 
 ## Known limitations
