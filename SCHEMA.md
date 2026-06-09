@@ -521,7 +521,7 @@ The only **cross-user training signal**. One row per `(user_id, date, type)` —
 | `date` | date | YYYY-MM-DD. Part of PK. |
 | `type` | text | `lifts` / `run` / `conditioning`. Part of PK. |
 
-Primary key `(user_id, date, type)`. RLS select: your own rows **or** an accepted friend's (`are_friends(auth.uid(), user_id)` from Phase 1); write (insert/update/delete): your own rows only. The client keeps it in sync as a pure function of `history` — a row exists iff at least one session of that date+type exists — updated on every save/delete/edit, plus a one-time backfill of existing history on upgrade.
+Primary key `(user_id, date, type)`. RLS select: your own rows, an accepted friend's (`are_friends`), **or** a joined co-member's in a shared challenge (`shares_joined_challenge`, added v0.34.0 Phase B so the per-challenge grid works even between members who aren't friends); write (insert/update/delete): your own rows only. The client keeps it in sync as a pure function of `history` — a row exists iff at least one session of that date+type exists — updated on every save/delete/edit, plus a one-time backfill of existing history on upgrade.
 
 ### `challenges` and `challenge_members` tables (app v0.34.0 — Challenges Phase A)
 

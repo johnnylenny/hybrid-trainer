@@ -37,7 +37,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 **Stats**
 - Five charts: bodyweight, per-exercise progression, estimated 1RM (Epley), run pace trend, weekly volume by type
-- Challenge view: a consistency grid for a single activity type (lift, run, or conditioning) with day and week views and a personal weekly goal. Add friends (Settings → Friends, by code or email) and they show up as rows alongside you — a green dot just means a session of that type happened that day. Friends only ever see your training *days*, never the weights, paces, notes, or bodyweight inside a session
+- Challenge view: a consistency grid. The "Friends overview" shows you and your friends for one activity type (add friends in Settings → Friends, by code or email). You can also start a **challenge** — a named, time-boxed group of up to 6, tracking any mix of lift/run/conditioning, where each member sets their own weekly goal; pick it from the grid's dropdown to see everyone's weekly consistency, and finished challenges archive. A green dot just means a qualifying session happened — others only ever see your training *days*, never the weights, paces, notes, or bodyweight inside a session
 
 **Sync across devices** (new in v0.10)
 - Sign up with email and password, or use a magic link
@@ -69,7 +69,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 
 ## Status
 
-v0.33 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. Lift logging pre-fills each set from your last session and lets you check sets off as done. You can add friends (by code or email) and the Stats "challenge" grid shows your training consistency next to theirs — friends see only which days you trained each type, never the session details. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
+v0.35 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. Lift logging pre-fills each set from your last session and lets you check sets off as done. You can add friends (by code or email), and start time-boxed challenge groups (up to 6, any mix of activities, each member's own weekly goal); the Stats grid shows everyone's training consistency side by side — others see only which days you trained, never the session details. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -108,7 +108,7 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 **Long-term:**
 - Conflict resolution for simultaneous edits on two devices
 - Strava export for completed sessions
-- Challenges with friends — friends and the shared challenge grid now work (add friends by code or email; see each other's training-day consistency). Still to come: comments on the grid, then optionally formal named challenges with start/end dates
+- Challenges with friends — friends, challenge groups, and the per-challenge grid now work (named, time-boxed, up to 6 people, per-member goals). Still to come: a comment thread inside each challenge
 - Hub-style dashboard aggregating training load across modalities
 
 ## Known limitations

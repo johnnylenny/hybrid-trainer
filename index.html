@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.34.0 — Challenge groups: backend + manage UI (Challenges Phase A)
+  HYBRID TRAINER v0.35.0 — Per-challenge grid on Stats (Challenges Phase B)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.35.0:
+    - The Stats grid now has a PICKER: "Friends overview" (the v0.33 all-friends
+      grid, unchanged) plus each of your challenges, with an Archived group.
+    - Selecting a challenge shows ITS members across the WEEKS of its date range.
+      A member's week dot is green when they hit THEIR OWN goal that week, counting
+      a session of ANY of the challenge's activities (lift/run/conditioning). Only
+      joined members appear; invited-not-joined are noted under the grid.
+    - Needs the Phase B migration _local/migrations/challenges-phase-b.sql, which
+      widens the `training_days` read policy with `shares_joined_challenge` so
+      joined co-members can see each other's dots even when they aren't friends
+      (still only date+type — the `sessions` table is never exposed).
+    - Client: `challengeState.selected` (overview | challenge id), `setChallengeSelected`,
+      `loadChallengeGridData` (pulls joined members' training_days for the window),
+      `challengeWeeks`, `trainedAnyOnDay`, and a refactor of `challengeCardHtml` into
+      a dispatcher + `overviewViewHtml` + `challengeViewHtml`. Comments are still
+      Phase C — the challenge view shows "comments coming soon", no box yet.
+    - No SCHEMA_VERSION change (standalone tables) - stays 16. APP_VERSION v0.35.0.
 
   What's new in v0.34.0:
     - CHALLENGE GROUPS (Settings -> Challenges). A challenge is a named, time-boxed
@@ -651,6 +669,7 @@
   .challenge-grid tbody tr { border-top: 1px solid var(--border); }
   .challenge-grid .cg-person { font-weight: 600; color: var(--text); }
   .challenge-grid .cg-you { color: var(--accent); }
+  .challenge-grid .cg-goaltag { display: block; font-size: 0.62rem; color: var(--text-dim); font-weight: 500; }
   .challenge-grid .cg-ava { margin-right: 5px; }
   .cg-dot { display: inline-block; width: 13px; height: 13px; border-radius: 50%; }
   .cg-dot.on { background: var(--accent); }
@@ -893,7 +912,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.34.0</small>
+      <small>v0.35.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1204,7 +1223,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.34.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.35.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1242,7 +1261,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.34.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.35.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4257,7 +4276,7 @@ const CHALLENGE_MODALITIES = [
   { key: 'conditioning', label: 'Conditioning', name: 'Conditioning challenge' }
 ];
 // Current selection (module state, like renderStats._pickedExercise).
-let challengeState = { modality: 'lifts', view: 'day' };
+let challengeState = { modality: 'lifts', view: 'day', selected: 'overview' };
 
 // Your personal weekly goal (days/week of the chosen type), 1-7. Local-only for now.
 function getChallengeGoal() {
@@ -4347,13 +4366,124 @@ async function loadChallengeFriends() {
   }
 }
 
+// ---- Per-challenge grid data (Phase B, v0.35.0) ----
+let challengeGridCache = {}; // challengeId -> [{ userId, name, avatar, goal, you, days:Set }]
+
+// The Mon-Sun weeks spanned by a challenge's date range, oldest first.
+function challengeWeeks(ch) {
+  const toLocal = (ymd) => { const p = (ymd || '').split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); };
+  let cur = weekStartDate(toLocal(ch.start_date));
+  const last = weekStartDate(toLocal(ch.end_date));
+  const out = [];
+  let guard = 0;
+  while (cur <= last && guard < 53) {
+    const dates = [];
+    for (let i = 0; i < 7; i++) { const x = new Date(cur); x.setDate(cur.getDate() + i); dates.push(ymdLocal(x)); }
+    out.push({ startStr: ymdLocal(cur), dates: dates });
+    const next = new Date(cur); next.setDate(cur.getDate() + 7); cur = next; guard++;
+  }
+  return out;
+}
+// did this person train ANY of the challenge's modalities that day?
+function trainedAnyOnDay(person, modKeys, dateStr) {
+  return modKeys.some(k => person.days && person.days.has(dateStr + '|' + k));
+}
+// Pull joined members' training_days for the challenge window (you from real
+// history, others from training_days, gated by shares_joined_challenge RLS).
+async function loadChallengeGridData(ch) {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  const joined = (ch.members || []).filter(m => m.status === 'joined');
+  const others = joined.filter(m => m.userId !== currentUser.id).map(m => m.userId);
+  const byUser = {};
+  try {
+    if (others.length) {
+      const { data, error } = await sb.from('training_days')
+        .select('user_id, date, type').in('user_id', others)
+        .gte('date', ch.start_date).lte('date', ch.end_date);
+      if (error) throw error;
+      (data || []).forEach(r => { (byUser[r.user_id] = byUser[r.user_id] || new Set()).add(r.date + '|' + r.type); });
+    }
+  } catch (e) { console.warn('loadChallengeGridData failed:', e.message || e); }
+  const myDays = buildDaysSet(state.history);
+  challengeGridCache[ch.id] = joined.map(m => ({
+    userId: m.userId,
+    name: m.userId === currentUser.id ? (settings.displayName || 'You') : m.name,
+    avatar: m.avatar, goal: m.goal || 3, you: m.userId === currentUser.id,
+    days: m.userId === currentUser.id ? myDays : (byUser[m.userId] || new Set())
+  }));
+}
+
+// Dispatcher: the always-on Friends overview grid, or a specific challenge grid.
 function challengeCardHtml() {
+  const active = challengesCache.mine.filter(c => !challengeIsArchived(c));
+  const archived = challengesCache.mine.filter(challengeIsArchived);
+  let selected = challengeState.selected || 'overview';
+  const ch = (selected !== 'overview') ? challengesCache.mine.find(c => c.id === selected) : null;
+  if (selected !== 'overview' && !ch) selected = 'overview'; // stale id (deleted) -> overview
+
+  // Picker (only when signed in AND you have at least one challenge).
+  let pickerSel = '';
+  if (appMode === 'cloud' && currentUser && (active.length || archived.length)) {
+    const opt = (val, label, sel) => '<option value="' + val + '"' + (sel ? ' selected' : '') + '>' + escapeHtml(label) + '</option>';
+    let opts = opt('overview', 'Friends overview', selected === 'overview');
+    if (active.length) opts += '<optgroup label="Challenges">' + active.map(c => opt(c.id, c.name, selected === c.id)).join('') + '</optgroup>';
+    if (archived.length) opts += '<optgroup label="Archived">' + archived.map(c => opt(c.id, c.name, selected === c.id)).join('') + '</optgroup>';
+    pickerSel = '<div class="cg-controls"><select aria-label="View" onchange="setChallengeSelected(this.value)">' + opts + '</select></div>';
+  }
+
+  return ch ? challengeViewHtml(ch, pickerSel) : overviewViewHtml(pickerSel);
+}
+
+// A specific challenge: members x the weeks of its date range, green when that
+// member hit their OWN goal that week counting ANY of the challenge's activities.
+function challengeViewHtml(ch, pickerSel) {
+  const modKeys = (ch.modalities || '').split(',').filter(Boolean);
+  const modLabel = challengeModalitiesLabel(ch.modalities);
+  const arch = challengeIsArchived(ch);
+  const people = challengeGridCache[ch.id] ||
+    (ch.members || []).filter(m => m.status === 'joined').map(m => ({
+      userId: m.userId, name: (currentUser && m.userId === currentUser.id) ? (settings.displayName || 'You') : m.name,
+      avatar: m.avatar, goal: m.goal || 3, you: currentUser && m.userId === currentUser.id, days: new Set()
+    }));
+  const weeks = challengeWeeks(ch);
+  const nameCell = (p) => {
+    const ava = p.avatar ? '<span class="cg-ava">' + avatarEmoji(p.avatar) + '</span>' : '';
+    return '<td class="cg-name"><span class="cg-person' + (p.you ? ' cg-you' : '') + '">' + ava + escapeHtml(p.name) + '</span><small class="cg-goaltag">' + p.goal + '/wk</small></td>';
+  };
+  const head = '<tr><th class="cg-name"></th>' +
+    weeks.map(w => { const p = w.startStr.split('-'); return '<th class="cg-day">' + Number(p[1]) + '/' + Number(p[2]) + '</th>'; }).join('') +
+    '<th>Weeks</th></tr>';
+  const body = people.map(p => {
+    let weeksHit = 0;
+    const cells = weeks.map(w => {
+      const c = w.dates.reduce((n, dt) => n + (trainedAnyOnDay(p, modKeys, dt) ? 1 : 0), 0);
+      const hit = c >= p.goal; if (hit) weeksHit++;
+      return '<td><span class="cg-dot ' + (hit ? 'on' : 'off') + '" title="' + c + ' day' + (c === 1 ? '' : 's') + '"></span></td>';
+    }).join('');
+    const pill = '<span class="cg-pill ' + (weeksHit >= Math.ceil(weeks.length / 2) ? 'hit' : 'miss') + '">' + weeksHit + '/' + weeks.length + '</span>';
+    return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
+  }).join('');
+  const invited = (ch.members || []).filter(m => m.status === 'invited').length;
+  const sub = modLabel + ' · ' + fmtChallengeDate(ch.start_date) + '–' + fmtChallengeDate(ch.end_date) + (arch ? ' · Archived' : '');
+  const note = 'Green = a week that member hit their own goal (any of: ' + modLabel + '). ' +
+    (invited ? invited + ' invited, not joined yet. ' : '') + 'Group comments are coming soon.';
+  // No comment box here yet (Phase C); no #cg-comments so renderChallengeComments no-ops.
+  return '<div class="chart-card" id="challenge-card">' +
+    '<h3>' + escapeHtml(ch.name) + '</h3>' +
+    '<div class="chart-sub">' + sub + '</div>' +
+    pickerSel +
+    '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
+    '<div class="cg-note">' + note + '</div>' +
+    '</div>';
+}
+
+// The always-on Friends overview (v0.33): you + accepted friends, one activity.
+function overviewViewHtml(pickerSel) {
   const mod = CHALLENGE_MODALITIES.find(m => m.key === challengeState.modality) || CHALLENGE_MODALITIES[0];
-  const noun = mod.label.toLowerCase().replace(/s$/, ''); // "lift" / "run" / "conditioning"
+  const noun = mod.label.toLowerCase().replace(/s$/, '');
   const view = challengeState.view;
   const goal = getChallengeGoal();
   const me = { name: settings.displayName || 'You', avatar: settings.avatar || '', you: true, days: buildDaysSet(state.history) };
-  // You first, then your accepted friends (loaded async when Stats opens).
   const people = [me].concat(challengeFriends);
 
   const nameCell = (p) => {
@@ -4401,22 +4531,23 @@ function challengeCardHtml() {
 
   const modSel = '<select aria-label="Activity type" onchange="setChallengeModality(this.value)">' +
     CHALLENGE_MODALITIES.map(m => '<option value="' + m.key + '"' + (m.key === mod.key ? ' selected' : '') + '>' + m.label + '</option>').join('') + '</select>';
-  const viewSel = '<select aria-label="View" onchange="setChallengeView(this.value)">' +
+  const viewSel = '<select aria-label="Day or week" onchange="setChallengeView(this.value)">' +
     [['day', 'Day'], ['week', 'Week']].map(v => '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>';
   const goalSel = '<select aria-label="Weekly goal" onchange="setChallengeGoal(this.value)">' +
     [1, 2, 3, 4, 5, 6, 7].map(n => '<option value="' + n + '"' + (n === goal ? ' selected' : '') + '>Goal: ' + n + '/wk</option>').join('') + '</select>';
 
   let note;
   if (appMode !== 'cloud' || !currentUser) {
-    note = 'Sign in and add friends (Settings → Friends) to compare training here. Your goal and comments save to this browser only.';
+    note = 'Sign in and add friends (Settings → Friends) to compare training here, or start a challenge group.';
   } else if (challengeFriends.length) {
-    note = 'You and your friends. A dot only means a session of this type happened that day — no weights, paces, or notes are shared. Your goal and comments save to this browser only.';
+    note = 'You and your friends. A dot only means a session of this type happened that day — no weights, paces, or notes are shared. Your goal + comments save to this browser only.';
   } else {
-    note = 'Just you so far. Add friends in Settings → Friends and they show up here. Your goal and comments save to this browser only.';
+    note = 'Just you so far. Add friends in Settings → Friends, or start a challenge group. Your goal + comments save to this browser only.';
   }
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + mod.name + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
+    pickerSel +
     '<div class="cg-controls">' + modSel + viewSel + goalSel + '</div>' +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="cg-note">' + note + '</div>' +
@@ -4434,6 +4565,15 @@ function refreshChallenge() {
 }
 function setChallengeModality(v) { challengeState.modality = v; refreshChallenge(); }
 function setChallengeView(v) { challengeState.view = v; refreshChallenge(); }
+// Switch the grid between Friends overview and a specific challenge.
+function setChallengeSelected(v) {
+  challengeState.selected = v;
+  if (v !== 'overview') {
+    const ch = challengesCache.mine.find(c => c.id === v);
+    if (ch && !challengeGridCache[ch.id]) { loadChallengeGridData(ch).then(refreshChallenge); }
+  }
+  refreshChallenge();
+}
 
 function loadChallengeComments() {
   try { return JSON.parse(localStorage.getItem(CHALLENGE_COMMENTS_KEY)) || []; }
@@ -4473,7 +4613,14 @@ function renderStats() {
   // Pull friends' training days in the background, then repaint just the grid.
   // The synchronous innerHTML below lands first, so #challenge-card exists by
   // the time this resolves. No-op in local mode.
-  if (appMode === 'cloud' && currentUser) loadChallengeFriends().then(refreshChallenge);
+  if (appMode === 'cloud' && currentUser) {
+    Promise.all([loadChallengeFriends(), loadChallenges().catch(() => {})]).then(() => {
+      const sel = challengeState.selected;
+      const ch = (sel && sel !== 'overview') ? challengesCache.mine.find(c => c.id === sel) : null;
+      if (ch) return loadChallengeGridData(ch).then(refreshChallenge);
+      refreshChallenge();
+    });
+  }
 
   if (typeof Chart === 'undefined') {
     container.innerHTML = challengeHtml + '<div class="card"><p class="muted">Charts need an internet connection to load the charting library. Reconnect and reopen this tab.</p></div>';
