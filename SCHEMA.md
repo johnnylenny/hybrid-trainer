@@ -550,9 +550,23 @@ Named, time-boxed groups (up to 6) that track one or more activities. The challe
 
 Three SECURITY DEFINER helpers gate access without RLS recursion: `is_challenge_member` (any status), `is_joined_member` (joined only), `shares_challenge` (do two users share a challenge — lets co-members read each other's `profiles` even when not friends; the `profiles` select policy is widened to include it). Mutations go through SECURITY DEFINER RPCs that enforce the rules pure RLS can't: `create_challenge` (inserts the challenge + owner as a joined member), `invite_to_challenge` (owner-only, friend-only via `are_friends`, max 6), `accept_challenge_invite` (flips your own row to joined). Leave/decline = delete your own `challenge_members` row; the owner deleting the challenge cascades members (and, in Phase C, comments). RLS: a challenge + its roster are readable by any member; only the owner mutates the challenge row.
 
+### `challenge_comments` table (app v0.36.0 — Challenges Phase C)
+
+A comment thread scoped to one challenge. NOT tied to `SCHEMA_VERSION`. Full DDL + RLS in `_local/migrations/challenges-phase-c.sql`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | `gen_random_uuid()`. |
+| `challenge_id` | uuid | FK to `challenges`, cascade. Which challenge's thread. |
+| `author_id` | uuid | FK to `auth.users`, cascade. |
+| `body` | text | The comment (client caps at 280). |
+| `created_at` | timestamptz | Server-set. |
+
+RLS: read + insert are gated by `is_joined_member(challenge_id, auth.uid())` — only joined members of that challenge see or post in its thread; delete is your own only. The app shows the thread under the per-challenge grid (Phase B); archived challenges render it read-only.
+
 ### Row Level Security
 
-The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) and `training_days` (v0.33.0) have **cross-user** read access gated by friendship (`are_friends`/`has_friend_link`); `challenges`/`challenge_members` (v0.34.0) are gated by shared membership (`is_challenge_member`/`shares_challenge`), which also widens `profiles` reads to co-members — see the sections just above.
+The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) and `training_days` (v0.33.0) have **cross-user** read access gated by friendship (`are_friends`/`has_friend_link`); `challenges`/`challenge_members` (v0.34.0) and `challenge_comments` (v0.36.0) are gated by challenge membership (`is_challenge_member`/`is_joined_member`/`shares_challenge`), which also widens `profiles` (co-members) and `training_days` (joined co-members, v0.35.0) reads — see the sections just above.
 
 ## Local ↔ Cloud mapping
 

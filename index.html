@@ -1,7 +1,24 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.35.1 — Per-challenge grid: Day view + tidier controls
+  HYBRID TRAINER v0.36.0 — Per-challenge comments (Challenges Phase C — feature complete)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.36.0:
+    - Each challenge now has its own COMMENT THREAD, shared with the group. Open a
+      challenge from the Stats grid picker and the comment box + thread appear
+      below it. Only JOINED members of that challenge can read and post; you can
+      delete your own (the × shows only on yours). Archived challenges show the
+      thread read-only (no box).
+    - New `challenge_comments` table (id, challenge_id, author_id, body,
+      created_at). RLS: read/insert gated by `is_joined_member(challenge_id)`,
+      delete your own. The old localStorage comment prototype is removed; the
+      Friends overview no longer has a comment box (comments live in challenges).
+    - This completes the challenge-groups feature (manage → grid → comments).
+      Client: `fetchChallengeComments` (per-challenge cache), `renderChallengeComments`
+      (scoped to the selected challenge, author names from members),
+      `addChallengeComment` / `deleteChallengeComment`, `challengeCommentAuthorName`.
+    - REQUIRES the migration _local/migrations/challenges-phase-c.sql. No
+      SCHEMA_VERSION change (standalone table) — stays 16. APP_VERSION v0.36.0.
 
   What's new in v0.35.1:
     - The per-challenge grid now has the same Day / Week toggle as the Friends
@@ -692,6 +709,8 @@
   .cg-comment .cg-c-who { font-weight: 600; color: var(--text); margin-right: 6px; }
   .cg-comment .cg-c-when { font-size: 0.7rem; color: var(--text-dim); }
   .cg-comment .cg-c-text { color: var(--text-muted); margin-top: 1px; }
+  .cg-comment .cg-c-del { border: none; background: none; color: var(--text-dim); cursor: pointer; font-size: 0.95rem; line-height: 1; padding: 0 4px; margin-left: 2px; }
+  .cg-comment .cg-c-del:hover { color: var(--danger); }
   .cg-comment-box { display: flex; gap: 8px; margin-top: 8px; }
   .cg-comment-box input { flex: 1; }
   /* Friends (Settings) */
@@ -921,7 +940,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.35.1</small>
+      <small>v0.36.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1232,7 +1251,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.35.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.36.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1270,7 +1289,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.35.1'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.36.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4277,7 +4296,6 @@ function secondsToPace(s) {
 // only to this browser's localStorage for now.
 const CHALLENGE_DEFAULT_GOAL = 3;  // default sessions/week if none saved
 const CHALLENGE_WEEKS = 6;         // how many weeks the Week view shows
-const CHALLENGE_COMMENTS_KEY = 'ht_challenge_comments_proto';
 const CHALLENGE_GOAL_KEY = 'ht_challenge_goal_proto';
 const CHALLENGE_MODALITIES = [
   { key: 'lifts',        label: 'Lifts',        name: 'Lift challenge' },
@@ -4483,7 +4501,7 @@ function challengeViewHtml(ch, pickerSel) {
       const pill = '<span class="cg-pill ' + (hit ? 'hit' : 'miss') + '">' + trained + '/7</span>';
       return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
     }).join('');
-    note = 'This week. Green dot = a day with any of: ' + modLabel + '. The Week pill turns green at each person\'s own goal. ' + invitedNote + 'Group comments are coming soon.';
+    note = 'This week. Green dot = a day with any of: ' + modLabel + '. The Week pill turns green at each person\'s own goal. ' + invitedNote;
   } else {
     const weeks = challengeWeeks(ch);
     head = '<tr><th class="cg-name"></th>' +
@@ -4499,16 +4517,20 @@ function challengeViewHtml(ch, pickerSel) {
       const pill = '<span class="cg-pill ' + (weeksHit >= Math.ceil(weeks.length / 2) ? 'hit' : 'miss') + '">' + weeksHit + '/' + weeks.length + '</span>';
       return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
     }).join('');
-    note = 'Green = a week that member hit their own goal (any of: ' + modLabel + '). ' + invitedNote + 'Group comments are coming soon.';
+    note = 'Green = a week that member hit their own goal (any of: ' + modLabel + '). ' + invitedNote;
   }
   const sub = modLabel + ' · ' + fmtChallengeDate(ch.start_date) + '–' + fmtChallengeDate(ch.end_date) + (arch ? ' · Archived' : '');
-  // No comment box here yet (Phase C); no #cg-comments so renderChallengeComments no-ops.
+  // Comment thread for this challenge (joined members). Box hidden when archived.
+  const commentBox = arch ? '' :
+    '<div class="cg-comment-box"><input type="text" id="cg-comment-input" placeholder="Comment to the group..." maxlength="280" onkeydown="if(event.key===&quot;Enter&quot;)addChallengeComment()"><button class="modal-btn primary" onclick="addChallengeComment()">Post</button></div>';
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + escapeHtml(ch.name) + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
     controls +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="cg-note">' + note + '</div>' +
+    '<div class="cg-comments" id="cg-comments"></div>' +
+    commentBox +
     '</div>';
 }
 
@@ -4575,18 +4597,17 @@ function overviewViewHtml(pickerSel) {
   if (appMode !== 'cloud' || !currentUser) {
     note = 'Sign in and add friends (Settings → Friends) to compare training here, or start a challenge group.';
   } else if (challengeFriends.length) {
-    note = 'You and your friends. A dot only means a session of this type happened that day — no weights, paces, or notes are shared. Your goal + comments save to this browser only.';
+    note = 'You and your friends. A dot only means a session of this type happened that day — no weights, paces, or notes are shared. Your weekly goal saves to this browser. Pick a challenge above to comment with a group.';
   } else {
-    note = 'Just you so far. Add friends in Settings → Friends, or start a challenge group. Your goal + comments save to this browser only.';
+    note = 'Just you so far. Add friends in Settings → Friends, or start a challenge group. Your weekly goal saves to this browser.';
   }
+  // Overview has no comments — those live inside a challenge (pick one above).
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + mod.name + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
     '<div class="cg-controls">' + (pickerSel || '') + modSel + viewSel + goalSel + '</div>' +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="cg-note">' + note + '</div>' +
-    '<div class="cg-comments" id="cg-comments"></div>' +
-    '<div class="cg-comment-box"><input type="text" id="cg-comment-input" placeholder="Leave a comment..." maxlength="280" onkeydown="if(event.key===&quot;Enter&quot;)addChallengeComment()"><button class="modal-btn primary" onclick="addChallengeComment()">Post</button></div>' +
     '</div>';
 }
 
@@ -4604,40 +4625,87 @@ function setChallengeSelected(v) {
   challengeState.selected = v;
   if (v !== 'overview') {
     const ch = challengesCache.mine.find(c => c.id === v);
-    if (ch && !challengeGridCache[ch.id]) { loadChallengeGridData(ch).then(refreshChallenge); }
+    if (ch) {
+      if (!challengeGridCache[ch.id]) loadChallengeGridData(ch).then(refreshChallenge);
+      fetchChallengeComments(v).then(renderChallengeComments);
+    }
   }
   refreshChallenge();
 }
 
-function loadChallengeComments() {
-  try { return JSON.parse(localStorage.getItem(CHALLENGE_COMMENTS_KEY)) || []; }
-  catch (e) { return []; }
+// ---- Per-challenge comments (Phase C, v0.36.0) ----
+// Cloud-backed, scoped to the selected challenge; only JOINED members read/post.
+// Replaces the old localStorage prototype. The overview has no comments.
+let challengeCommentsCache = {}; // challengeId -> [{ id, challenge_id, author_id, body, created_at }]
+function formatCommentDate(iso) {
+  try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+  catch (e) { return ''; }
 }
+function challengeCommentAuthorName(ch, authorId) {
+  if (currentUser && authorId === currentUser.id) return settings.displayName || 'You';
+  const m = (ch.members || []).find(x => x.userId === authorId);
+  return m ? m.name : 'Member';
+}
+async function fetchChallengeComments(cid) {
+  if (appMode !== 'cloud' || !sb || !currentUser || !cid) return;
+  try {
+    const { data, error } = await sb.from('challenge_comments')
+      .select('id, challenge_id, author_id, body, created_at')
+      .eq('challenge_id', cid).order('created_at', { ascending: false }).limit(200);
+    if (error) throw error;
+    challengeCommentsCache[cid] = data || [];
+  } catch (e) {
+    console.warn('fetchChallengeComments failed (migration not run yet?):', e.message || e);
+    challengeCommentsCache[cid] = [];
+  }
+}
+// Renders the selected challenge's thread into #cg-comments. No-ops in the
+// overview (which has no #cg-comments element).
 function renderChallengeComments() {
   const box = document.getElementById('cg-comments');
   if (!box) return;
-  const comments = loadChallengeComments();
-  if (comments.length === 0) { box.innerHTML = '<p class="muted">No comments yet. Be the first.</p>'; return; }
-  box.innerHTML = comments.map(c =>
-    '<div class="cg-comment"><span class="cg-c-who">' + escapeHtml(c.who) + '</span>' +
-    '<span class="cg-c-when">' + escapeHtml(c.when) + '</span>' +
-    '<div class="cg-c-text">' + escapeHtml(c.text) + '</div></div>'
-  ).join('');
+  const sel = challengeState.selected;
+  if (!sel || sel === 'overview') { box.innerHTML = ''; return; }
+  const ch = challengesCache.mine.find(c => c.id === sel);
+  if (!ch) { box.innerHTML = ''; return; }
+  const list = challengeCommentsCache[sel] || [];
+  if (!list.length) { box.innerHTML = '<p class="muted">No comments yet. Be the first.</p>'; return; }
+  box.innerHTML = list.map(c => {
+    const mine = currentUser && c.author_id === currentUser.id;
+    const del = mine ? '<button class="cg-c-del" title="Delete" onclick="deleteChallengeComment(\'' + c.id + '\')">×</button>' : '';
+    return '<div class="cg-comment"><span class="cg-c-who">' + escapeHtml(challengeCommentAuthorName(ch, c.author_id)) + '</span>' +
+      '<span class="cg-c-when">' + escapeHtml(formatCommentDate(c.created_at)) + '</span>' + del +
+      '<div class="cg-c-text">' + escapeHtml(c.body) + '</div></div>';
+  }).join('');
 }
-function addChallengeComment() {
+async function addChallengeComment() {
+  const sel = challengeState.selected;
   const input = document.getElementById('cg-comment-input');
   if (!input) return;
   const text = input.value.trim();
   if (!text) return;
-  const comments = loadChallengeComments();
-  comments.unshift({
-    who: settings.displayName || 'You',
-    text: text,
-    when: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  });
-  try { localStorage.setItem(CHALLENGE_COMMENTS_KEY, JSON.stringify(comments)); } catch (e) {}
-  input.value = '';
-  renderChallengeComments();
+  if (!sel || sel === 'overview') return;
+  if (appMode !== 'cloud' || !sb || !currentUser) { showToast('Sign in to comment.', 'error'); return; }
+  try {
+    const { data, error } = await sb.from('challenge_comments')
+      .insert({ challenge_id: sel, author_id: currentUser.id, body: text.slice(0, 280) })
+      .select('id, challenge_id, author_id, body, created_at').single();
+    if (error) throw error;
+    input.value = '';
+    if (data) (challengeCommentsCache[sel] = challengeCommentsCache[sel] || []).unshift(data);
+    renderChallengeComments();
+  } catch (e) { showToast('Could not post comment: ' + (e.message || e), 'error'); }
+}
+async function deleteChallengeComment(id) {
+  const sel = challengeState.selected;
+  if (!sb || !currentUser) return;
+  if (!await modalConfirm('Delete this comment?', { okText: 'Delete', danger: true })) return;
+  try {
+    const { error } = await sb.from('challenge_comments').delete().eq('id', id);
+    if (error) throw error;
+    if (sel && challengeCommentsCache[sel]) challengeCommentsCache[sel] = challengeCommentsCache[sel].filter(c => c.id !== id);
+    renderChallengeComments();
+  } catch (e) { showToast('Could not delete comment: ' + (e.message || e), 'error'); }
 }
 
 function renderStats() {
@@ -4651,7 +4719,10 @@ function renderStats() {
     Promise.all([loadChallengeFriends(), loadChallenges().catch(() => {})]).then(() => {
       const sel = challengeState.selected;
       const ch = (sel && sel !== 'overview') ? challengesCache.mine.find(c => c.id === sel) : null;
-      if (ch) return loadChallengeGridData(ch).then(refreshChallenge);
+      if (ch) {
+        fetchChallengeComments(ch.id).then(renderChallengeComments);
+        return loadChallengeGridData(ch).then(refreshChallenge);
+      }
       refreshChallenge();
     });
   }
