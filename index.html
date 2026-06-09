@@ -705,8 +705,8 @@
   .chart-wrap { position: relative; height: 240px; width: 100%; }
   .chart-picker { margin-bottom: 12px; }
   /* Challenge grid (prototype) */
-  .cg-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-  .cg-controls select { flex: 0 0 auto; min-width: 0; width: auto; }
+  .cg-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .cg-controls select { width: 100%; min-width: 0; }
   .challenge-grid { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   .challenge-grid th, .challenge-grid td { padding: 7px 2px; text-align: center; }
   .challenge-grid th.cg-day { width: 30px; }
