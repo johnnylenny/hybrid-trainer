@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.36.0 — Per-challenge comments (Challenges Phase C — feature complete)
+  HYBRID TRAINER v0.37.0 — UI cleanup pass (rhythm, declutter, mobile)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new in v0.36.0:
@@ -434,7 +434,7 @@
     font-feature-settings: 'tnum';
   }
   h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
-  h2 { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+  h2 { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
   h3 { font-size: 1.05rem; font-weight: 600; margin: 0; }
   p { font-size: 0.95rem; }
   .muted { color: var(--text-muted); font-size: 0.85rem; }
@@ -469,7 +469,7 @@
   .screen.active { display: block; }
   .card {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 16px; margin-bottom: 12px;
+    border-radius: var(--radius); padding: 16px; margin-bottom: 10px;
     box-shadow: var(--shadow-sm);
   }
   .card.compact { padding: 12px; }
@@ -499,7 +499,7 @@
     color: var(--text-muted); font-size: 0.72rem; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .field { margin-bottom: 10px; }
+  .field { margin-bottom: 9px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
   .row .field { flex: 1; min-width: 140px; margin-bottom: 0; }
   .input-with-button { display: flex; gap: 6px; align-items: stretch; }
@@ -940,7 +940,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.36.0</small>
+      <small>v0.37.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1044,7 +1044,6 @@
 </section>
 
 <section id="screen-history" class="screen">
-  <h2>History</h2>
   <div class="btn-group" style="margin-bottom:12px">
     <button class="btn-secondary" onclick="openImportChooser()">Import workouts</button>
     <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
@@ -1096,13 +1095,10 @@
 </section>
 
 <section id="screen-stats" class="screen">
-  <h2>Stats</h2>
   <div id="stats-content"></div>
 </section>
 
 <section id="screen-settings" class="screen">
-  <h2>Settings</h2>
-
   <div class="card" id="profile-card" style="display:none">
     <h3 style="margin:0 0 12px 0; text-transform:none; letter-spacing:0; font-size:1rem; font-weight:600;">Profile</h3>
     <div class="setting-row" style="align-items:flex-start">
@@ -1251,7 +1247,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.36.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.37.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1289,7 +1285,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.36.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.37.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
