@@ -474,6 +474,27 @@
   }
   .card.compact { padding: 12px; }
   .card.danger-zone { border-color: var(--danger); }
+  .filter-disclosure { margin-bottom: 10px; }
+  .filter-disclosure > summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; min-height: 44px; box-sizing: border-box;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted); font-size: 0.75rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .filter-disclosure > summary::-webkit-details-marker { display: none; }
+  .filter-disclosure > summary::after {
+    content: '▾'; margin-left: auto; font-size: 0.9rem;
+    transition: transform 0.15s; color: var(--text-dim);
+  }
+  .filter-disclosure[open] > summary::after { transform: rotate(180deg); }
+  .fd-badge {
+    background: var(--accent); color: var(--accent-text);
+    border-radius: 999px; padding: 1px 8px; font-size: 0.72rem;
+    letter-spacing: 0; font-weight: 700; text-transform: none;
+  }
   input, select, textarea {
     font-family: inherit; font-size: 1rem;
     background: var(--surface); border: 1px solid var(--border); color: var(--text);
@@ -1049,7 +1070,12 @@
     <button class="btn-secondary" onclick="exportData()">Export all data (JSON)</button>
     <button class="btn-secondary" onclick="importData()">Restore from backup</button>
   </div>
-  <div class="card compact">
+  <details class="filter-disclosure" id="history-filters">
+    <summary>
+      <span>Filters</span>
+      <span class="fd-badge" id="history-filter-badge" hidden></span>
+    </summary>
+    <div class="card compact" style="margin-top:6px">
     <div class="row">
       <div class="field">
         <label>Sort</label>
@@ -1089,7 +1115,8 @@
       <label>Search name</label>
       <input type="text" id="history-search" placeholder="e.g. CHEST" oninput="renderHistory()">
     </div>
-  </div>
+    </div>
+  </details>
   <p class="muted" style="margin: 8px 4px 12px 4px">Tap a session to edit it.</p>
   <div id="history-list"></div>
 </section>
@@ -4054,6 +4081,14 @@ function renderHistory() {
   const typeFilter = document.getElementById('history-type').value;
   const rangeFilter = document.getElementById('history-range').value;
   const searchText = document.getElementById('history-search').value.trim().toLowerCase();
+
+  // Active-filter indicator on the collapsed "Filters" disclosure (sort excluded — it hides nothing)
+  const activeCount = [currentPhase, typeFilter, rangeFilter, searchText].filter(Boolean).length;
+  const badge = document.getElementById('history-filter-badge');
+  if (badge) {
+    badge.textContent = activeCount;
+    badge.hidden = activeCount === 0;
+  }
 
   // start from full list, apply filters (AND logic)
   let filtered = state.history.slice();
