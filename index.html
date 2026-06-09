@@ -1,7 +1,32 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.33.0 — Challenge grid wired to real friends (Social Phase 2)
+  HYBRID TRAINER v0.34.0 — Challenge groups: backend + manage UI (Challenges Phase A)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.34.0:
+    - CHALLENGE GROUPS (Settings -> Challenges). A challenge is a named, time-boxed
+      group of up to 6 people that tracks one or more activities (lift / run /
+      conditioning). You create one, set start + end dates and your own weekly
+      goal, and invite friends; they accept to join. Finished challenges (past the
+      end date) auto-move to an Archived list.
+    - This is Phase A: the backend + the create/manage UI only. The per-challenge
+      GRID is Phase B (v0.35.0), per-challenge COMMENTS are Phase C (v0.36.0).
+      (Note: the always-on friends grid from v0.33 is unchanged for now.)
+    - New Supabase tables `challenges` (owner, name, modalities, start/end) and
+      `challenge_members` (status invited/joined, each member's own goal). Three
+      SECURITY DEFINER RPCs enforce the rules: create_challenge, invite_to_challenge
+      (owner-only, friends-only, max 6), accept_challenge_invite. Leave/decline =
+      delete your own member row; owner delete cascades. Helpers is_challenge_member
+      / is_joined_member / shares_challenge. Visibility is by SHARED MEMBERSHIP, not
+      friendship (co-members aren't necessarily friends), so the `profiles` read
+      policy is widened with shares_challenge. The full `sessions` table is still
+      never exposed.
+    - Client: loadChallenges / renderChallenges / createChallenge flow / invite +
+      accept + leave handlers, a create modal (name, activities, dates, goal, friend
+      multiselect) and an invite-more picker. Reuses friendsCache + the modal/toast
+      helpers.
+    - REQUIRES the migration _local/migrations/challenges-phase-a.sql. No
+      SCHEMA_VERSION change (standalone tables) - stays 16. APP_VERSION v0.34.0.
 
   What's new in v0.33.0:
     - The Stats challenge grid now shows YOUR ACCEPTED FRIENDS as real rows, not
@@ -650,8 +675,20 @@
   .friend-group-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin: 14px 0 6px; }
   .friend-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); }
   .friend-who { font-weight: 600; color: var(--text); }
-  .friend-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+  .friend-actions { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; }
   .friend-actions button { padding: 5px 12px; font-size: 0.8rem; }
+  /* Challenges */
+  .ch-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .ch-card.archived { opacity: 0.65; }
+  .ch-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .ch-card-head strong { font-size: 0.95rem; color: var(--text); }
+  .ch-meta { font-size: 0.72rem; color: var(--text-dim); }
+  .ch-sub { font-size: 0.82rem; color: var(--text-muted); margin: 4px 0 8px; }
+  .ch-label { display: block; font-size: 0.85rem; font-weight: 600; margin: 10px 0 4px; }
+  .ch-checks { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 4px; }
+  .ch-checks.ch-friends { max-height: 160px; overflow-y: auto; flex-direction: column; gap: 6px; }
+  .ch-check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; cursor: pointer; }
+  .ch-check input { width: auto; }
   @supports (padding: env(safe-area-inset-bottom)) {
     body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
@@ -856,7 +893,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.33.0</small>
+      <small>v0.34.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1046,6 +1083,11 @@
     <div id="friends-content"></div>
   </div>
 
+  <h2>Challenges</h2>
+  <div class="card" id="challenges-card">
+    <div id="challenges-content"></div>
+  </div>
+
   <h2>Appearance</h2>
   <div class="card">
     <div class="setting-row">
@@ -1162,7 +1204,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.33.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.34.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1200,7 +1242,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.33.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.34.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4712,9 +4754,10 @@ function renderSettings() {
   const nameInput = document.getElementById('set-displayname');
   if (nameInput) nameInput.value = settings.displayName || '';
   renderAvatarPicker();
-  // Friends: paint from cache immediately, then pull fresh data (cloud only).
+  // Friends + challenges: paint from cache immediately, then pull fresh (cloud only).
   renderFriends();
-  if (appMode === 'cloud' && currentUser) refreshFriendsUI();
+  renderChallenges();
+  if (appMode === 'cloud' && currentUser) { refreshFriendsUI(); refreshChallengesUI(); }
 }
 
 // Build the 5 avatar option buttons. Clicking one updates settings and refreshes header.
@@ -5575,6 +5618,282 @@ function renderFriends() {
   }
 
   box.innerHTML = codeRow + addRow + '<div class="friends-lists">' + lists + '</div>';
+}
+
+// =====================================================================
+// CHALLENGES (social, v0.34.0) -> Supabase `challenges` + `challenge_members`.
+// A challenge is a named, time-boxed group (<=6) tracking one or more
+// activities. You invite friends; co-members see each other via shared
+// membership (shares_challenge), not friendship. This Phase A is the backend +
+// the create/manage UI (Settings -> Challenges); the per-challenge grid is
+// Phase B, comments Phase C. Needs _local/migrations/challenges-phase-a.sql.
+// =====================================================================
+let challengesCache = { mine: [], invites: [] }; // mine = owner/joined; invites = pending for me
+
+function todayYmd() { return ymdLocal(new Date()); }
+function challengeIsArchived(ch) { return !!ch.end_date && ch.end_date < todayYmd(); }
+function fmtChallengeDate(ymd) {
+  if (!ymd) return '';
+  const p = ymd.split('-'); if (p.length !== 3) return ymd;
+  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function challengeModalitiesLabel(mods) {
+  return (mods || '').split(',').filter(Boolean).map(k => {
+    const m = CHALLENGE_MODALITIES.find(x => x.key === k); return m ? m.label : k;
+  }).join(' + ');
+}
+
+// Pull my memberships, the challenges, their full rosters, and member names.
+async function loadChallenges() {
+  challengesCache = { mine: [], invites: [] };
+  if (appMode !== 'cloud' || !sb || !currentUser) return challengesCache;
+  const me = currentUser.id;
+  const { data: myMems, error } = await sb.from('challenge_members')
+    .select('challenge_id, status, goal').eq('user_id', me);
+  if (error) throw error;
+  const cids = (myMems || []).map(m => m.challenge_id);
+  if (!cids.length) return challengesCache;
+  const [chRes, memRes] = await Promise.all([
+    sb.from('challenges').select('*').in('id', cids),
+    sb.from('challenge_members').select('challenge_id, user_id, status, goal').in('challenge_id', cids)
+  ]);
+  if (chRes.error) throw chRes.error;
+  const allMems = memRes.data || [];
+  const memberIds = [...new Set(allMems.map(m => m.user_id))].filter(id => id !== me);
+  const profById = {};
+  if (memberIds.length) {
+    const { data: profs } = await sb.from('profiles')
+      .select('user_id, display_name, avatar').in('user_id', memberIds);
+    (profs || []).forEach(p => { profById[p.user_id] = p; });
+  }
+  const memsByCh = {};
+  allMems.forEach(m => { (memsByCh[m.challenge_id] = memsByCh[m.challenge_id] || []).push(m); });
+  (chRes.data || []).forEach(c => {
+    const myMem = (myMems || []).find(m => m.challenge_id === c.id) || {};
+    const members = (memsByCh[c.id] || []).map(m => ({
+      userId: m.user_id, status: m.status, goal: m.goal,
+      name: m.user_id === me ? (settings.displayName || 'You')
+                             : ((profById[m.user_id] || {}).display_name || 'Hybrid athlete'),
+      avatar: (profById[m.user_id] || {}).avatar || ''
+    }));
+    const entry = Object.assign({}, c, { members: members, myStatus: myMem.status, isOwner: c.owner_id === me });
+    if (myMem.status === 'invited') challengesCache.invites.push(entry);
+    else challengesCache.mine.push(entry);
+  });
+  return challengesCache;
+}
+
+async function refreshChallengesUI() {
+  try { await loadChallenges(); } catch (e) { console.warn('loadChallenges failed:', e.message || e); }
+  renderChallenges();
+}
+
+async function acceptChallengeInvite(cid) {
+  if (!sb || !currentUser) return;
+  try {
+    const { error } = await sb.rpc('accept_challenge_invite', { p_cid: cid });
+    if (error) throw error;
+    showToast('Joined the challenge.', 'success');
+    refreshChallengesUI();
+  } catch (e) { showToast('Could not join: ' + (e.message || e), 'error'); }
+}
+// Decline an invite, leave a challenge, or (owner) delete it.
+async function declineOrLeaveChallenge(cid, isOwner) {
+  if (!sb || !currentUser) return;
+  if (isOwner) {
+    if (!await modalConfirm('Delete this challenge for everyone? This removes the grid and any comments.', { okText: 'Delete', danger: true })) return;
+    try {
+      const { error } = await sb.from('challenges').delete().eq('id', cid);
+      if (error) throw error;
+      showToast('Challenge deleted.', 'info');
+      refreshChallengesUI();
+    } catch (e) { showToast('Could not delete: ' + (e.message || e), 'error'); }
+    return;
+  }
+  // non-owner: leave / decline = delete own member row
+  try {
+    const { error } = await sb.from('challenge_members').delete().eq('challenge_id', cid).eq('user_id', currentUser.id);
+    if (error) throw error;
+    showToast('Left the challenge.', 'info');
+    refreshChallengesUI();
+  } catch (e) { showToast('Could not update: ' + (e.message || e), 'error'); }
+}
+async function inviteFriendToChallenge(cid, friendId) {
+  if (!sb || !currentUser) return;
+  try {
+    const { data, error } = await sb.rpc('invite_to_challenge', { p_cid: cid, p_friend: friendId });
+    if (error) throw error;
+    showToast(data || 'Invite sent.', 'success');
+    refreshChallengesUI();
+    renderInvitePicker(cid); // refresh the open picker, if any
+  } catch (e) { showToast('Could not invite: ' + (e.message || e), 'error'); }
+}
+
+// ---- Create-challenge modal ----
+function openCreateChallengeModal() {
+  if (appMode !== 'cloud' || !currentUser) { showToast('Sign in to create a challenge.', 'error'); return; }
+  let o = document.getElementById('challenge-modal-overlay');
+  if (!o) {
+    o = document.createElement('div');
+    o.id = 'challenge-modal-overlay';
+    o.className = 'modal-overlay';
+    document.body.appendChild(o);
+    o.addEventListener('mousedown', e => { if (e.target === o) o.style.display = 'none'; });
+  }
+  const start = todayYmd();
+  const endD = new Date(); endD.setDate(endD.getDate() + 28);
+  const end = ymdLocal(endD);
+  const modBoxes = CHALLENGE_MODALITIES.map(m =>
+    '<label class="ch-check"><input type="checkbox" class="ch-mod" value="' + m.key + '"' + (m.key === 'lifts' ? ' checked' : '') + '> ' + m.label + '</label>').join('');
+  const friends = (friendsCache.accepted || []);
+  const friendBoxes = friends.length
+    ? friends.map(f => '<label class="ch-check"><input type="checkbox" class="ch-friend" value="' + f.userId + '"> ' + escapeHtml(f.name) + '</label>').join('')
+    : '<p class="muted" style="margin:4px 0">No friends yet — add some in the Friends section first, or create the challenge and invite later.</p>';
+  const goalOpts = [1,2,3,4,5,6,7].map(n => '<option value="' + n + '"' + (n === 3 ? ' selected' : '') + '>' + n + '/week</option>').join('');
+  o.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true">' +
+      '<h3 class="modal-title">New challenge</h3>' +
+      '<label class="ch-label">Name</label>' +
+      '<input id="ch-name" class="modal-input" type="text" maxlength="60" placeholder="e.g. June Lift Streak">' +
+      '<label class="ch-label">Activities that count</label>' +
+      '<div class="ch-checks">' + modBoxes + '</div>' +
+      '<div style="display:flex; gap:10px;">' +
+        '<div style="flex:1"><label class="ch-label">Start</label><input id="ch-start" class="modal-input" type="date" value="' + start + '"></div>' +
+        '<div style="flex:1"><label class="ch-label">End</label><input id="ch-end" class="modal-input" type="date" value="' + end + '"></div>' +
+      '</div>' +
+      '<label class="ch-label">Your weekly goal</label>' +
+      '<select id="ch-goal" class="modal-input">' + goalOpts + '</select>' +
+      '<label class="ch-label">Invite friends (optional)</label>' +
+      '<div class="ch-checks ch-friends">' + friendBoxes + '</div>' +
+      '<div class="modal-buttons">' +
+        '<button class="modal-btn secondary" onclick="document.getElementById(\'challenge-modal-overlay\').style.display=\'none\'">Cancel</button>' +
+        '<button class="modal-btn primary" id="ch-create-btn" onclick="submitCreateChallenge()">Create</button>' +
+      '</div>' +
+    '</div>';
+  o.style.display = 'flex';
+  // make sure the friends list is current for next open
+  loadFriends().then(() => {}).catch(() => {});
+}
+async function submitCreateChallenge() {
+  const name = (document.getElementById('ch-name').value || '').trim();
+  if (!name) { showToast('Give the challenge a name.', 'error'); return; }
+  const mods = Array.prototype.map.call(document.querySelectorAll('.ch-mod:checked'), el => el.value);
+  if (!mods.length) { showToast('Pick at least one activity.', 'error'); return; }
+  const start = document.getElementById('ch-start').value;
+  const end = document.getElementById('ch-end').value;
+  if (!start || !end || end < start) { showToast('Check the start/end dates.', 'error'); return; }
+  const goal = parseInt(document.getElementById('ch-goal').value, 10) || 3;
+  const friendIds = Array.prototype.map.call(document.querySelectorAll('.ch-friend:checked'), el => el.value);
+  const btn = document.getElementById('ch-create-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const { data: newId, error } = await sb.rpc('create_challenge',
+      { p_name: name, p_modalities: mods.join(','), p_start: start, p_end: end, p_goal: goal });
+    if (error) throw error;
+    // invite the picked friends (best-effort; report failures but keep going)
+    for (const fid of friendIds) {
+      const { error: invErr } = await sb.rpc('invite_to_challenge', { p_cid: newId, p_friend: fid });
+      if (invErr) showToast('Could not invite one friend: ' + invErr.message, 'error');
+    }
+    document.getElementById('challenge-modal-overlay').style.display = 'none';
+    showToast('Challenge created.', 'success');
+    refreshChallengesUI();
+  } catch (e) {
+    showToast('Could not create challenge: ' + (e.message || e), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---- Invite-more picker (per owned challenge) ----
+function openInvitePicker(cid) {
+  let o = document.getElementById('invite-picker-overlay');
+  if (!o) {
+    o = document.createElement('div');
+    o.id = 'invite-picker-overlay';
+    o.className = 'modal-overlay';
+    document.body.appendChild(o);
+    o.addEventListener('mousedown', e => { if (e.target === o) o.style.display = 'none'; });
+  }
+  o.dataset.cid = cid;
+  o.style.display = 'flex';
+  loadFriends().then(() => renderInvitePicker(cid)).catch(() => renderInvitePicker(cid));
+}
+function renderInvitePicker(cid) {
+  const o = document.getElementById('invite-picker-overlay');
+  if (!o || o.style.display === 'none' || o.dataset.cid !== cid) return;
+  const ch = challengesCache.mine.find(c => c.id === cid);
+  const memberIds = new Set((ch ? ch.members : []).map(m => m.userId));
+  const candidates = (friendsCache.accepted || []).filter(f => !memberIds.has(f.userId));
+  const full = ch && ch.members.length >= 6;
+  let rows;
+  if (full) rows = '<p class="muted">This challenge is full (6 members).</p>';
+  else if (!candidates.length) rows = '<p class="muted">No more friends to invite. Add friends, or everyone\'s already in.</p>';
+  else rows = candidates.map(f =>
+    '<div class="friend-row"><span class="friend-who">' + escapeHtml(f.name) + '</span>' +
+    '<span class="friend-actions"><button class="modal-btn primary" onclick="inviteFriendToChallenge(\'' + cid + '\', \'' + f.userId + '\')">Invite</button></span></div>').join('');
+  o.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true">' +
+      '<h3 class="modal-title">Invite friends</h3>' +
+      '<div class="friends-lists">' + rows + '</div>' +
+      '<div class="modal-buttons"><button class="modal-btn secondary" onclick="document.getElementById(\'invite-picker-overlay\').style.display=\'none\'">Done</button></div>' +
+    '</div>';
+}
+
+// Paint the Challenges section of Settings.
+function renderChallenges() {
+  const box = document.getElementById('challenges-content');
+  if (!box) return;
+  if (appMode !== 'cloud' || !currentUser) {
+    box.innerHTML = '<p class="muted">Sign in to create challenges with your friends.</p>';
+    return;
+  }
+  const newBtn = '<div class="btn-group" style="margin-bottom:12px"><button class="modal-btn primary" onclick="openCreateChallengeModal()">+ New challenge</button></div>';
+
+  let invites = '';
+  if (challengesCache.invites.length) {
+    invites = '<div class="friend-group-label">Invites to you</div>' +
+      challengesCache.invites.map(ch => {
+        const owner = ch.members.find(m => m.userId === ch.owner_id);
+        return '<div class="ch-card"><div class="ch-card-head"><strong>' + escapeHtml(ch.name) + '</strong>' +
+          '<span class="ch-meta">' + challengeModalitiesLabel(ch.modalities) + ' · ' + fmtChallengeDate(ch.start_date) + '–' + fmtChallengeDate(ch.end_date) + '</span></div>' +
+          '<div class="ch-sub">From ' + escapeHtml(owner ? owner.name : 'a friend') + '</div>' +
+          '<div class="friend-actions">' +
+            '<button class="modal-btn primary" onclick="acceptChallengeInvite(\'' + ch.id + '\')">Accept</button>' +
+            '<button class="btn-secondary" onclick="declineOrLeaveChallenge(\'' + ch.id + '\', false)">Decline</button>' +
+          '</div></div>';
+      }).join('');
+  }
+
+  const active = challengesCache.mine.filter(c => !challengeIsArchived(c));
+  const archived = challengesCache.mine.filter(challengeIsArchived);
+  const renderCard = (ch) => {
+    const arch = challengeIsArchived(ch);
+    const names = ch.members.map(m => escapeHtml(m.name) + (m.status === 'invited' ? ' (invited)' : '')).join(', ');
+    let actions = '';
+    if (!arch) {
+      if (ch.isOwner) {
+        actions = (ch.members.length < 6 ? '<button class="btn-secondary" onclick="openInvitePicker(\'' + ch.id + '\')">Invite</button>' : '') +
+                  '<button class="btn-secondary" onclick="declineOrLeaveChallenge(\'' + ch.id + '\', true)">Delete</button>';
+      } else {
+        actions = '<button class="btn-secondary" onclick="declineOrLeaveChallenge(\'' + ch.id + '\', false)">Leave</button>';
+      }
+    }
+    return '<div class="ch-card' + (arch ? ' archived' : '') + '">' +
+      '<div class="ch-card-head"><strong>' + escapeHtml(ch.name) + '</strong>' +
+      '<span class="ch-meta">' + challengeModalitiesLabel(ch.modalities) + ' · ' + fmtChallengeDate(ch.start_date) + '–' + fmtChallengeDate(ch.end_date) + (arch ? ' · Archived' : '') + '</span></div>' +
+      '<div class="ch-sub">' + names + '</div>' +
+      (actions ? '<div class="friend-actions">' + actions + '</div>' : '') +
+      '</div>';
+  };
+
+  let mine = '<div class="friend-group-label">Your challenges</div>';
+  mine += active.length ? active.map(renderCard).join('') : '<p class="muted">None yet. Create one above.</p>';
+  let arch = '';
+  if (archived.length) arch = '<div class="friend-group-label">Archived</div>' + archived.map(renderCard).join('');
+
+  box.innerHTML = newBtn + invites + mine + arch;
 }
 
 // ---- Paste-JSON import modal (front end for mergeImportedSessions) ----

@@ -523,9 +523,36 @@ The only **cross-user training signal**. One row per `(user_id, date, type)` —
 
 Primary key `(user_id, date, type)`. RLS select: your own rows **or** an accepted friend's (`are_friends(auth.uid(), user_id)` from Phase 1); write (insert/update/delete): your own rows only. The client keeps it in sync as a pure function of `history` — a row exists iff at least one session of that date+type exists — updated on every save/delete/edit, plus a one-time backfill of existing history on upgrade.
 
+### `challenges` and `challenge_members` tables (app v0.34.0 — Challenges Phase A)
+
+Named, time-boxed groups (up to 6) that track one or more activities. The challenge — not the friend graph — scopes who sees the grid (Phase B) and comments (Phase C). NOT tied to `SCHEMA_VERSION`. Full DDL + RLS + RPCs in `_local/migrations/challenges-phase-a.sql`.
+
+`challenges`:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid (PK) | `gen_random_uuid()`. |
+| `owner_id` | uuid | FK to `auth.users`, cascade. The creator. |
+| `name` | text | |
+| `modalities` | text | Comma-joined subset of `lifts,run,conditioning`. |
+| `start_date` / `end_date` | date | Past the end date the app shows it as Archived. |
+| `created_at` | timestamptz | |
+
+`challenge_members`:
+
+| Column | Type | Notes |
+|---|---|---|
+| `challenge_id` | uuid | FK to `challenges`, cascade. Part of PK. |
+| `user_id` | uuid | FK to `auth.users`, cascade. Part of PK. |
+| `status` | text | `invited` or `joined`. |
+| `goal` | int | That member's own weekly goal (1–7). |
+| `joined_at` | timestamptz | |
+
+Three SECURITY DEFINER helpers gate access without RLS recursion: `is_challenge_member` (any status), `is_joined_member` (joined only), `shares_challenge` (do two users share a challenge — lets co-members read each other's `profiles` even when not friends; the `profiles` select policy is widened to include it). Mutations go through SECURITY DEFINER RPCs that enforce the rules pure RLS can't: `create_challenge` (inserts the challenge + owner as a joined member), `invite_to_challenge` (owner-only, friend-only via `are_friends`, max 6), `accept_challenge_invite` (flips your own row to joined). Leave/decline = delete your own `challenge_members` row; the owner deleting the challenge cascades members (and, in Phase C, comments). RLS: a challenge + its roster are readable by any member; only the owner mutates the challenge row.
+
 ### Row Level Security
 
-The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) and `training_days` (v0.33.0) are the tables with **cross-user** read access, gated by accepted/linked friendship via the `are_friends`/`has_friend_link` helpers — see the sections just above.
+The three per-user tables (`sessions`, `templates`, `user_settings`) have RLS enabled with a single policy each: `auth.uid() = user_id`. The anon/publishable key embedded in the client cannot read or write anyone else's rows. If you write your own tooling against the Supabase API, you'll need to sign in as the user you're querying for. `starter_templates` is public-readable (`select using (true)`); `feedback` is insert-only for clients (no select policy, so reports stay private). `profiles`/`friendships` (v0.32.0) and `training_days` (v0.33.0) have **cross-user** read access gated by friendship (`are_friends`/`has_friend_link`); `challenges`/`challenge_members` (v0.34.0) are gated by shared membership (`is_challenge_member`/`shares_challenge`), which also widens `profiles` reads to co-members — see the sections just above.
 
 ## Local ↔ Cloud mapping
 
