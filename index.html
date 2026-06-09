@@ -1,7 +1,16 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.35.0 — Per-challenge grid on Stats (Challenges Phase B)
+  HYBRID TRAINER v0.35.1 — Per-challenge grid: Day view + tidier controls
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.35.1:
+    - The per-challenge grid now has the same Day / Week toggle as the Friends
+      overview (it was week-only before). Day = this week's 7 days, green per day
+      a member did any of the challenge's activities, pill turns green at each
+      person's own goal. Week = the weeks of the challenge's date range.
+    - The challenge picker now shares one controls row with the Day/Week toggle
+      (and, in the overview, with the activity/goal selects) instead of stacking
+      on its own line. No DB change. APP_VERSION v0.35.1.
 
   What's new in v0.35.0:
     - The Stats grid now has a PICKER: "Friends overview" (the v0.33 all-friends
@@ -912,7 +921,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.35.0</small>
+      <small>v0.35.1</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1223,7 +1232,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.35.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.35.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1261,7 +1270,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.35.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.35.1'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4428,50 +4437,76 @@ function challengeCardHtml() {
     let opts = opt('overview', 'Friends overview', selected === 'overview');
     if (active.length) opts += '<optgroup label="Challenges">' + active.map(c => opt(c.id, c.name, selected === c.id)).join('') + '</optgroup>';
     if (archived.length) opts += '<optgroup label="Archived">' + archived.map(c => opt(c.id, c.name, selected === c.id)).join('') + '</optgroup>';
-    pickerSel = '<div class="cg-controls"><select aria-label="View" onchange="setChallengeSelected(this.value)">' + opts + '</select></div>';
+    pickerSel = '<select aria-label="Challenge" onchange="setChallengeSelected(this.value)">' + opts + '</select>';
   }
 
   return ch ? challengeViewHtml(ch, pickerSel) : overviewViewHtml(pickerSel);
 }
 
-// A specific challenge: members x the weeks of its date range, green when that
-// member hit their OWN goal that week counting ANY of the challenge's activities.
+// A specific challenge: members in rows, with a Day view (this week's 7 days)
+// or Week view (the weeks of the challenge's date range). A dot counts a session
+// of ANY of the challenge's activities; each member is measured vs their OWN goal.
 function challengeViewHtml(ch, pickerSel) {
   const modKeys = (ch.modalities || '').split(',').filter(Boolean);
   const modLabel = challengeModalitiesLabel(ch.modalities);
   const arch = challengeIsArchived(ch);
+  const view = challengeState.view;
   const people = challengeGridCache[ch.id] ||
     (ch.members || []).filter(m => m.status === 'joined').map(m => ({
       userId: m.userId, name: (currentUser && m.userId === currentUser.id) ? (settings.displayName || 'You') : m.name,
       avatar: m.avatar, goal: m.goal || 3, you: currentUser && m.userId === currentUser.id, days: new Set()
     }));
-  const weeks = challengeWeeks(ch);
   const nameCell = (p) => {
     const ava = p.avatar ? '<span class="cg-ava">' + avatarEmoji(p.avatar) + '</span>' : '';
     return '<td class="cg-name"><span class="cg-person' + (p.you ? ' cg-you' : '') + '">' + ava + escapeHtml(p.name) + '</span><small class="cg-goaltag">' + p.goal + '/wk</small></td>';
   };
-  const head = '<tr><th class="cg-name"></th>' +
-    weeks.map(w => { const p = w.startStr.split('-'); return '<th class="cg-day">' + Number(p[1]) + '/' + Number(p[2]) + '</th>'; }).join('') +
-    '<th>Weeks</th></tr>';
-  const body = people.map(p => {
-    let weeksHit = 0;
-    const cells = weeks.map(w => {
-      const c = w.dates.reduce((n, dt) => n + (trainedAnyOnDay(p, modKeys, dt) ? 1 : 0), 0);
-      const hit = c >= p.goal; if (hit) weeksHit++;
-      return '<td><span class="cg-dot ' + (hit ? 'on' : 'off') + '" title="' + c + ' day' + (c === 1 ? '' : 's') + '"></span></td>';
-    }).join('');
-    const pill = '<span class="cg-pill ' + (weeksHit >= Math.ceil(weeks.length / 2) ? 'hit' : 'miss') + '">' + weeksHit + '/' + weeks.length + '</span>';
-    return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
-  }).join('');
+  const viewSel = '<select aria-label="Day or week" onchange="setChallengeView(this.value)">' +
+    [['day', 'Day'], ['week', 'Week']].map(v => '<option value="' + v[0] + '"' + (v[0] === view ? ' selected' : '') + '>' + v[1] + '</option>').join('') + '</select>';
+  const controls = '<div class="cg-controls">' + (pickerSel || '') + viewSel + '</div>';
   const invited = (ch.members || []).filter(m => m.status === 'invited').length;
+  const invitedNote = invited ? invited + ' invited, not joined yet. ' : '';
+
+  let head, body, note;
+  if (view === 'day') {
+    const weekDates = currentWeekDates();
+    const dayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    head = '<tr><th class="cg-name"></th>' +
+      weekDates.map((dt, i) => '<th class="cg-day">' + dayLabels[i] + '<small>' + dt.slice(8) + '</small></th>').join('') +
+      '<th>Week</th></tr>';
+    body = people.map(p => {
+      let trained = 0;
+      const cells = weekDates.map(dt => {
+        const on = trainedAnyOnDay(p, modKeys, dt); if (on) trained++;
+        return '<td><span class="cg-dot ' + (on ? 'on' : 'off') + '"></span></td>';
+      }).join('');
+      const hit = trained >= p.goal;
+      const pill = '<span class="cg-pill ' + (hit ? 'hit' : 'miss') + '">' + trained + '/7</span>';
+      return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
+    }).join('');
+    note = 'This week. Green dot = a day with any of: ' + modLabel + '. The Week pill turns green at each person\'s own goal. ' + invitedNote + 'Group comments are coming soon.';
+  } else {
+    const weeks = challengeWeeks(ch);
+    head = '<tr><th class="cg-name"></th>' +
+      weeks.map(w => { const p = w.startStr.split('-'); return '<th class="cg-day">' + Number(p[1]) + '/' + Number(p[2]) + '</th>'; }).join('') +
+      '<th>Weeks</th></tr>';
+    body = people.map(p => {
+      let weeksHit = 0;
+      const cells = weeks.map(w => {
+        const c = w.dates.reduce((n, dt) => n + (trainedAnyOnDay(p, modKeys, dt) ? 1 : 0), 0);
+        const hit = c >= p.goal; if (hit) weeksHit++;
+        return '<td><span class="cg-dot ' + (hit ? 'on' : 'off') + '" title="' + c + ' day' + (c === 1 ? '' : 's') + '"></span></td>';
+      }).join('');
+      const pill = '<span class="cg-pill ' + (weeksHit >= Math.ceil(weeks.length / 2) ? 'hit' : 'miss') + '">' + weeksHit + '/' + weeks.length + '</span>';
+      return '<tr>' + nameCell(p) + cells + '<td>' + pill + '</td></tr>';
+    }).join('');
+    note = 'Green = a week that member hit their own goal (any of: ' + modLabel + '). ' + invitedNote + 'Group comments are coming soon.';
+  }
   const sub = modLabel + ' · ' + fmtChallengeDate(ch.start_date) + '–' + fmtChallengeDate(ch.end_date) + (arch ? ' · Archived' : '');
-  const note = 'Green = a week that member hit their own goal (any of: ' + modLabel + '). ' +
-    (invited ? invited + ' invited, not joined yet. ' : '') + 'Group comments are coming soon.';
   // No comment box here yet (Phase C); no #cg-comments so renderChallengeComments no-ops.
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + escapeHtml(ch.name) + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
-    pickerSel +
+    controls +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="cg-note">' + note + '</div>' +
     '</div>';
@@ -4547,8 +4582,7 @@ function overviewViewHtml(pickerSel) {
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + mod.name + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
-    pickerSel +
-    '<div class="cg-controls">' + modSel + viewSel + goalSel + '</div>' +
+    '<div class="cg-controls">' + (pickerSel || '') + modSel + viewSel + goalSel + '</div>' +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="cg-note">' + note + '</div>' +
     '<div class="cg-comments" id="cg-comments"></div>' +
