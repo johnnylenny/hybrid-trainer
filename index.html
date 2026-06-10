@@ -746,6 +746,10 @@
   }
   .cg-c-like:hover { border-color: var(--accent); }
   .cg-c-like.liked { border-color: var(--accent); color: var(--accent); background: rgba(101, 163, 13, 0.12); }
+  /* Color emoji renders bright yellow always — desaturate it until liked so an
+     un-liked comment doesn't look already-liked. */
+  .cg-c-like .cg-c-thumb { filter: grayscale(1); opacity: 0.45; transition: filter 0.1s, opacity 0.1s; }
+  .cg-c-like.liked .cg-c-thumb { filter: none; opacity: 1; }
   .cg-c-like .cg-c-likecount { font-weight: 600; font-feature-settings: 'tnum'; }
   .cg-comment-box { display: flex; gap: 8px; margin-top: 8px; }
   .cg-comment-box input { flex: 1; }
@@ -4743,7 +4747,7 @@ function renderChallengeComments() {
     const mine = currentUser && c.author_id === currentUser.id;
     const del = mine ? '<button class="cg-c-del" title="Delete" onclick="deleteChallengeComment(\'' + c.id + '\')">×</button>' : '';
     const count = c._likeCount ? '<span class="cg-c-likecount">' + c._likeCount + '</span>' : '';
-    const like = '<button class="cg-c-like' + (c._liked ? ' liked' : '') + '" title="Like" aria-pressed="' + (c._liked ? 'true' : 'false') + '" onclick="toggleCommentLike(\'' + c.id + '\')">👍' + count + '</button>';
+    const like = '<button class="cg-c-like' + (c._liked ? ' liked' : '') + '" title="Like" aria-pressed="' + (c._liked ? 'true' : 'false') + '" onclick="toggleCommentLike(\'' + c.id + '\')"><span class="cg-c-thumb">👍</span>' + count + '</button>';
     return '<div class="cg-comment"><span class="cg-c-who">' + escapeHtml(challengeCommentAuthorName(ch, c.author_id)) + '</span>' +
       '<span class="cg-c-when">' + escapeHtml(formatCommentDate(c.created_at)) + '</span>' + del +
       '<div class="cg-c-text">' + escapeHtml(c.body) + '</div>' +
