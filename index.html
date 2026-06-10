@@ -433,6 +433,10 @@
     font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     font-feature-settings: 'tnum';
   }
+  /* No up/down spinners on number inputs — these are typed, not stepped */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
   h2 { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
   h3 { font-size: 1.05rem; font-weight: 600; margin: 0; }
@@ -1924,7 +1928,7 @@ let settings = {
 
 function emptySession() {
   return {
-    date: new Date().toISOString().slice(0, 10),
+    date: todayYmd(),
     startTime: '', endTime: '', endDate: '', bodyweight: '',
     name: '', phase: settings.defaultPhase || '',
     type: 'lifts', exercises: [],
@@ -2419,7 +2423,7 @@ function renderLog() {
   }
 }
 function setToday() {
-  state.currentSession.date = new Date().toISOString().slice(0, 10);
+  state.currentSession.date = todayYmd();
   saveState(); renderLog();
 }
 async function cancelEdit() {
