@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.39.0 — Import runs/rides from Garmin (.TCX) + auto-detect run type
+  HYBRID TRAINER v0.40.0 — Garmin tempo auto-detect via an easy-HR ceiling
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new in v0.36.0:
@@ -980,7 +980,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.39.0</small>
+      <small>v0.40.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1234,6 +1234,15 @@
     </div>
     <div class="setting-row">
       <div class="setting-label">
+        <div class="title">Easy run HR ceiling</div>
+        <div class="desc">For Garmin import. A run that holds above this heart rate (and isn't intervals or long) is tagged Tempo. Blank = skip.</div>
+      </div>
+      <div class="setting-control">
+        <input type="number" id="set-easyhr" min="100" max="220" inputmode="numeric" placeholder="e.g. 150" style="width:6em;" onchange="updateSetting('easyHrCeiling', this.value);">
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
         <div class="title">Intensity tracking</div>
         <div class="desc">RPE = effort 1-10. RIR = reps in reserve.</div>
       </div>
@@ -1293,7 +1302,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.39.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.40.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1331,7 +1340,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.39.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.40.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1938,7 +1947,8 @@ let state = {
 let settings = {
   theme: 'auto', timeFormat: '24', units: 'lb', intensity: 'rpe',
   defaultPhase: '', distanceUnit: 'mi',
-  displayName: '', avatar: ''
+  displayName: '', avatar: '',
+  easyHrCeiling: '' // local-only: HR above which a run reads as tempo on Garmin import (blank = off, not cloud-synced)
 };
 
 function emptySession() {
@@ -5103,6 +5113,7 @@ function renderSettings() {
   document.getElementById('set-timeformat').value = settings.timeFormat;
   document.getElementById('set-units').value = settings.units;
   document.getElementById('set-distanceunit').value = settings.distanceUnit || 'mi';
+  document.getElementById('set-easyhr').value = settings.easyHrCeiling || '';
   document.getElementById('set-intensity').value = settings.intensity;
   document.getElementById('set-defaultphase').value = settings.defaultPhase || '';
   // Profile card: only show when signed in (profile only matters in cloud mode)
@@ -5459,25 +5470,41 @@ function paceFromMetersSeconds(meters, seconds, unit) {
 }
 
 // Decide the run type from a parsed TCX activity: 'long' | 'intervals' |
-// 'easy'. tempo is intentionally NOT auto-detected (its form wants a
-// WU/work/CD split a flat file doesn't carry) — moderate runs fall through
-// to 'easy' and the user flips to tempo on the review screen if they want.
+// 'tempo' | 'easy'. tempo needs a per-person reference for "hard" — the
+// user's easy-HR ceiling (opts.easyHrCeiling). Without it, tempo can't be
+// told from easy, so a ceiling-less run falls through to 'easy' and the
+// user flips it on the review screen. Order matters: long and intervals
+// win over tempo (a long/interval session also runs hot).
 const RUN_LONG_SECONDS = 75 * 60;   // >= 75 min -> long
 const RUN_LONG_METERS = 16000;      // or >= ~10 mi / 16 km -> long
 const INTERVAL_MIN_LAPS = 4;        // need several laps...
 const INTERVAL_PACE_RATIO = 1.5;    // ...and a clear fast/slow contrast
-function classifyRunType(activity) {
+const TEMPO_MIN_SECONDS = 12 * 60;  // >= ~12 min held above the easy-HR ceiling -> tempo
+function classifyRunType(activity, opts) {
+  opts = opts || {};
   const a = activity || {};
   const secs = Number(a.totalSeconds) || 0;
   const meters = Number(a.distanceMeters) || 0;
   if (secs >= RUN_LONG_SECONDS || meters >= RUN_LONG_METERS) return 'long';
-  const paces = ((a.laps) || [])
+  const laps = (a.laps) || [];
+  const paces = laps
     .map(l => (Number(l.distanceMeters) > 0 && Number(l.totalSeconds) > 0)
       ? Number(l.totalSeconds) / Number(l.distanceMeters) : null)
     .filter(p => p && isFinite(p));
   if (paces.length >= INTERVAL_MIN_LAPS) {
     const max = Math.max(...paces), min = Math.min(...paces);
     if (min > 0 && max / min > INTERVAL_PACE_RATIO) return 'intervals';
+  }
+  // Tempo: time spent in laps whose avg HR sits above the user's easy
+  // ceiling. Falls back to the run's overall avg HR when laps lack HR.
+  const ceiling = Number(opts.easyHrCeiling) || 0;
+  if (ceiling > 0) {
+    let secAbove = 0;
+    for (const l of laps) {
+      if ((Number(l.avgHr) || 0) > ceiling) secAbove += Number(l.totalSeconds) || 0;
+    }
+    if (secAbove === 0 && (Number(a.avgHr) || 0) > ceiling) secAbove = secs;
+    if (secAbove >= TEMPO_MIN_SECONDS) return 'tempo';
   }
   return 'easy';
 }
@@ -5524,12 +5551,18 @@ function tcxActivityToSession(activity, opts) {
 
   if ((a.sport || '').toLowerCase() === 'running') {
     session.type = 'run';
-    const runType = classifyRunType(a);
+    const easyHrCeiling = opts.easyHrCeiling != null ? opts.easyHrCeiling
+      : (typeof settings !== 'undefined' ? settings.easyHrCeiling : '');
+    const runType = classifyRunType(a, { easyHrCeiling });
     if (runType === 'intervals') {
       const splitPaces = ((a.laps) || [])
         .map(l => paceFromMetersSeconds(l.distanceMeters, l.totalSeconds, unit))
         .filter(Boolean).join(', ');
       session.runData = { runType: 'intervals', splits: splitPaces, totalDistance: distStr, totalTime: timeStr, notes: '' };
+    } else if (runType === 'tempo') {
+      // We can't reliably split warm-up/work/cool-down from a flat file,
+      // so fill the totals + HR; the user breaks it down on review.
+      session.runData = { runType: 'tempo', distance: distStr, time: timeStr, hr: hrStr, notes: '' };
     } else {
       // easy and long share the same clean fields
       session.runData = { runType, distance: distStr, time: timeStr, pace: paceStr, hr: hrStr, notes: '' };
