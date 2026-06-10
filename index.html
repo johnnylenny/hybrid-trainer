@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.38.0 — Like challenge comments (👍)
+  HYBRID TRAINER v0.39.0 — Import runs/rides from Garmin (.TCX) + auto-detect run type
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new in v0.36.0:
@@ -980,7 +980,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.38.0</small>
+      <small>v0.39.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1293,7 +1293,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.38.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.39.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1331,7 +1331,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.38.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.39.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -5420,6 +5420,208 @@ async function importHevyCsv() {
 }
 
 // =====================================================================
+// GARMIN TCX IMPORT (v0.39.0)
+// Reads a Garmin Connect .TCX export (XML: open an activity -> gear ->
+// Export to TCX) into ONE session, auto-detects the run type, and hands
+// it to mergeImportedSessions() for review on the Log tab. Mirrors the
+// Hevy split: pure node-testable logic + a thin browser glue function.
+//
+// TCX is SI: distance in meters, time in seconds, timestamps in UTC. This
+// is the ONE importer that converts units ON PURPOSE (SI -> the user's
+// display unit) — the same translation buildAiImportPrompt asks the AI to
+// do. Nothing else in the app converts units.
+// =====================================================================
+
+// Whole seconds -> "M:SS" or "H:MM:SS".
+function secondsToClock(totalSeconds) {
+  const s = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
+// Meters -> a display-unit distance string (mi or km), 2 decimals.
+function metersToDisplay(meters, unit) {
+  const m = Number(meters) || 0;
+  const val = unit === 'km' ? m / 1000 : m / 1609.344;
+  return val.toFixed(2);
+}
+
+// Average pace as "M:SS" per display unit, from meters + seconds.
+function paceFromMetersSeconds(meters, seconds, unit) {
+  const m = Number(meters) || 0, s = Number(seconds) || 0;
+  if (m <= 0 || s <= 0) return '';
+  const distUnits = unit === 'km' ? m / 1000 : m / 1609.344;
+  if (distUnits <= 0) return '';
+  return secondsToClock(s / distUnits);
+}
+
+// Decide the run type from a parsed TCX activity: 'long' | 'intervals' |
+// 'easy'. tempo is intentionally NOT auto-detected (its form wants a
+// WU/work/CD split a flat file doesn't carry) — moderate runs fall through
+// to 'easy' and the user flips to tempo on the review screen if they want.
+const RUN_LONG_SECONDS = 75 * 60;   // >= 75 min -> long
+const RUN_LONG_METERS = 16000;      // or >= ~10 mi / 16 km -> long
+const INTERVAL_MIN_LAPS = 4;        // need several laps...
+const INTERVAL_PACE_RATIO = 1.5;    // ...and a clear fast/slow contrast
+function classifyRunType(activity) {
+  const a = activity || {};
+  const secs = Number(a.totalSeconds) || 0;
+  const meters = Number(a.distanceMeters) || 0;
+  if (secs >= RUN_LONG_SECONDS || meters >= RUN_LONG_METERS) return 'long';
+  const paces = ((a.laps) || [])
+    .map(l => (Number(l.distanceMeters) > 0 && Number(l.totalSeconds) > 0)
+      ? Number(l.totalSeconds) / Number(l.distanceMeters) : null)
+    .filter(p => p && isFinite(p));
+  if (paces.length >= INTERVAL_MIN_LAPS) {
+    const max = Math.max(...paces), min = Math.min(...paces);
+    if (min > 0 && max / min > INTERVAL_PACE_RATIO) return 'intervals';
+  }
+  return 'easy';
+}
+
+// Convert a parsed activity into the app's session shape. All values are
+// strings in the user's display units. opts.distanceUnit overrides the
+// settings global so this is node-testable in isolation.
+function tcxActivityToSession(activity, opts) {
+  opts = opts || {};
+  const unit = opts.distanceUnit || (typeof settings !== 'undefined' ? settings.distanceUnit : 'mi') || 'mi';
+  const a = activity || {};
+  const meters = Number(a.distanceMeters) || 0;
+  const secs = Number(a.totalSeconds) || 0;
+  const pad = n => String(n).padStart(2, '0');
+
+  // UTC ISO -> LOCAL date/time (TCX stamps are UTC; keep local like the
+  // rest of the app — see the UTC->local Today fix, commit aabcad5).
+  let date = '', startTime = '', endTime = '';
+  if (a.startIso) {
+    const d = new Date(a.startIso);
+    if (!isNaN(d.getTime())) {
+      date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      startTime = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      if (secs > 0) {
+        const e = new Date(d.getTime() + secs * 1000);
+        endTime = `${pad(e.getHours())}:${pad(e.getMinutes())}`;
+      }
+    }
+  }
+
+  const session = {
+    id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('garmin-' + (a.startIso || secs)),
+    date: date || new Date().toISOString().slice(0, 10),
+    startTime, endTime, endDate: '', bodyweight: '',
+    name: '', phase: (typeof settings !== 'undefined' ? (settings.defaultPhase || '') : ''),
+    type: 'lifts', exercises: [], runData: {}, condData: {}, notes: '',
+    importSource: 'garmin:' + (a.startIso || '')
+  };
+
+  const distStr = meters > 0 ? metersToDisplay(meters, unit) : '';
+  const timeStr = secs > 0 ? secondsToClock(secs) : '';
+  const paceStr = paceFromMetersSeconds(meters, secs, unit);
+  const hrStr = a.avgHr ? String(Math.round(Number(a.avgHr))) : '';
+
+  if ((a.sport || '').toLowerCase() === 'running') {
+    session.type = 'run';
+    const runType = classifyRunType(a);
+    if (runType === 'intervals') {
+      const splitPaces = ((a.laps) || [])
+        .map(l => paceFromMetersSeconds(l.distanceMeters, l.totalSeconds, unit))
+        .filter(Boolean).join(', ');
+      session.runData = { runType: 'intervals', splits: splitPaces, totalDistance: distStr, totalTime: timeStr, notes: '' };
+    } else {
+      // easy and long share the same clean fields
+      session.runData = { runType, distance: distStr, time: timeStr, pace: paceStr, hr: hrStr, notes: '' };
+    }
+  } else {
+    // Biking / Other -> conditioning "other" (no dedicated bike form yet).
+    session.type = 'conditioning';
+    const modality = (a.sport || '').toLowerCase() === 'biking' ? 'Bike' : (a.sport || 'Other');
+    const bits = [];
+    if (distStr) bits.push(distStr + ' ' + unit);
+    if (timeStr) bits.push(timeStr);
+    session.condData = { condType: 'other', modality, total: bits.join(' / '), splits: hrStr ? ('Avg HR ' + hrStr) : '', notes: '' };
+  }
+  return session;
+}
+
+// Parse a Garmin .TCX (XML) string into a plain activity object. BROWSER
+// ONLY (DOMParser). Throws on bad XML or a non-TCX file. Reads by tag name
+// (the TCX elements have no prefix) so the ns3:/xsi: extension prefixes on
+// other elements don't matter.
+function parseGarminTcx(xmlText) {
+  const doc = new DOMParser().parseFromString(String(xmlText || ''), 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('That file is not valid XML.');
+  const activities = doc.getElementsByTagName('Activity');
+  if (!activities.length) throw new Error('No activity found — is this a Garmin TCX export?');
+  const act = activities[0];
+  const sport = act.getAttribute('Sport') || 'Other';
+
+  // <Id> directly under <Activity> is the ISO start time.
+  let startIso = '';
+  for (const child of act.children) {
+    if (child.localName === 'Id') { startIso = (child.textContent || '').trim(); break; }
+  }
+  const text = (parent, tag) => {
+    const el = parent.getElementsByTagName(tag)[0];
+    return el ? (el.textContent || '').trim() : '';
+  };
+
+  const lapEls = act.getElementsByTagName('Lap');
+  const laps = [];
+  let totalSeconds = 0, distanceMeters = 0, calories = 0, hrWeightedSum = 0, hrWeight = 0, maxHr = 0;
+  for (const lapEl of lapEls) {
+    const ls = Number(text(lapEl, 'TotalTimeSeconds')) || 0;
+    const ld = Number(text(lapEl, 'DistanceMeters')) || 0;
+    const lc = Number(text(lapEl, 'Calories')) || 0;
+    const avgEl = lapEl.getElementsByTagName('AverageHeartRateBpm')[0];
+    const maxEl = lapEl.getElementsByTagName('MaximumHeartRateBpm')[0];
+    const lAvgHr = avgEl ? Number(text(avgEl, 'Value')) || 0 : 0;
+    const lMaxHr = maxEl ? Number(text(maxEl, 'Value')) || 0 : 0;
+    totalSeconds += ls; distanceMeters += ld; calories += lc;
+    if (lAvgHr > 0 && ls > 0) { hrWeightedSum += lAvgHr * ls; hrWeight += ls; }
+    if (lMaxHr > maxHr) maxHr = lMaxHr;
+    laps.push({ totalSeconds: ls, distanceMeters: ld, calories: lc, avgHr: lAvgHr, maxHr: lMaxHr });
+  }
+  if (!startIso && lapEls.length) startIso = lapEls[0].getAttribute('StartTime') || '';
+
+  return {
+    sport, startIso, totalSeconds, distanceMeters, calories,
+    avgHr: hrWeight > 0 ? Math.round(hrWeightedSum / hrWeight) : 0,
+    maxHr, laps
+  };
+}
+
+// Browser glue: pick a .tcx file, parse it, map to a session, and route
+// through the shared merge core (single session -> Log tab for review).
+function importGarminFile() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.tcx,.xml,application/xml,text/xml';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      try {
+        const activity = parseGarminTcx(String(ev.target.result));
+        if (!activity.totalSeconds && !activity.distanceMeters) {
+          showToast('Could not read any distance or time from that file.', 'error');
+          return;
+        }
+        const session = tcxActivityToSession(activity);
+        await mergeImportedSessions([session]);
+      } catch (err) {
+        showToast('Could not read that file: ' + (err.message || err), 'error');
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// =====================================================================
 // GENERIC ADDITIVE IMPORT  (paste-JSON front end + reusable merge core)
 // mergeImportedSessions() is the shared core: future feeders (a Garmin
 // file parser, an AI reader, account merge) only need to produce session
@@ -6335,7 +6537,7 @@ function _ensureImportChooser() {
     '<h3 class="modal-title">Import workouts</h3>' +
     '<p class="modal-message">Where are these workouts coming from? Each option adds to your data, it never replaces anything.</p>' +
     row('import-src-hevy', 'From Hevy', 'Export a CSV in Hevy, then pick it here.', false) +
-    row('import-src-garmin', 'From Garmin', 'Coming soon.', true) +
+    row('import-src-garmin', 'From Garmin', 'Export a TCX from Garmin Connect (open an activity, gear icon, Export to TCX), then pick it here.', false) +
     row('import-src-ai', 'From notes, a photo, or another app', 'Use an AI to convert it, then paste the result.', false) +
     '<div class="modal-buttons">' +
       '<button class="modal-btn secondary" id="import-chooser-cancel">Cancel</button>' +
@@ -6345,6 +6547,7 @@ function _ensureImportChooser() {
   o.addEventListener('mousedown', e => { if (e.target === o) closeImportChooser(); });
   document.getElementById('import-chooser-cancel').addEventListener('click', closeImportChooser);
   document.getElementById('import-src-hevy').addEventListener('click', () => { closeImportChooser(); importHevyCsv(); });
+  document.getElementById('import-src-garmin').addEventListener('click', () => { closeImportChooser(); importGarminFile(); });
   document.getElementById('import-src-ai').addEventListener('click', () => { closeImportChooser(); openImportWorkoutModal(); });
 }
 function openImportChooser() {

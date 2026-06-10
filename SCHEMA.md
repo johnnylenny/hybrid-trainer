@@ -84,7 +84,7 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 | `runData` | object | Used when `type === "run"`. Empty otherwise. |
 | `condData` | object | Used when `type === "conditioning"`. Empty otherwise. |
 | `notes` | string | Free-text notes about the whole session. |
-| `importSource` | string | Stable id of an external source this session was imported from, used to skip duplicates on re-import. Empty for hand-logged sessions. Added in v15. Format `<source>:<id>` — e.g. Hevy CSV import uses `hevy:<start_time>\|<title>`. |
+| `importSource` | string | Stable id of an external source this session was imported from, used to skip duplicates on re-import. Empty for hand-logged sessions. Added in v15. Format `<source>:<id>` — e.g. Hevy CSV import uses `hevy:<start_time>\|<title>`; Garmin .TCX import (v0.39.0) uses `garmin:<startIso>`. |
 
 ## Exercise object (lifts only)
 
