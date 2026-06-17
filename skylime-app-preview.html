@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<!--
+  Hybrid Trainer reskinned with the Skylime design system — PREVIEW ONLY.
+  Standalone mock. NOT wired to data/Supabase, NOT linked from the app,
+  does not touch index.html. Dark mode default; light tokens alongside (toggle).
+  Now sketches the full app: Log (set types/delete/drag/notes/prev weights,
+  Run + Conditioning forms), History, Stats (grid + charts), Settings.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hybrid Trainer × Skylime — Reskin Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --skylime-bg-primary: #F7F8F7; --skylime-bg-surface: #FFFFFF; --skylime-bg-surface-muted: #F1F2F0;
+    --skylime-text-primary: #141210; --skylime-text-secondary: #6B6F6A; --skylime-text-tertiary: #9A9D97;
+    --skylime-border-default: #E2E4E1; --skylime-border-strong: #D5D8D4;
+    --skylime-blue: #1C80CD; --skylime-blue-hover: #176BAC; --skylime-blue-subtle-bg: #E6F1FB; --skylime-blue-subtle-text: #0C447C;
+    --skylime-lime: #CBF857; --skylime-lime-text-on: #1A2306;
+    --skylime-shadow-card: 0 2px 8px rgba(20, 18, 16, 0.10);
+    --status-success-bg: #EAF3DE; --status-success-text: #27500A;
+    --status-warning-bg: #FAEEDA; --status-warning-text: #633806;
+    --status-error-bg: #FCEBEB; --status-error-text: #791F1F;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif; --font-serif: 'Fraunces', Georgia, serif;
+    --text-xs: 12px; --text-sm: 13px; --text-base: 14px; --text-lg: 18px; --text-xl: 22px; --text-2xl: 28px; --text-hero-serif: 44px;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px;
+    --radius-sm: 8px; --radius-md: 14px; --radius-full: 999px;
+    --dot-on: var(--status-success-text); --dot-off: var(--skylime-border-strong);
+  }
+  :root[data-theme="dark"] {
+    --skylime-bg-primary: #0F1113; --skylime-bg-surface: #1B1E22; --skylime-bg-surface-muted: #22262A;
+    --skylime-text-primary: #F3F4F2; --skylime-text-secondary: #8C9298; --skylime-text-tertiary: #5C6066;
+    --skylime-border-default: #272B30; --skylime-border-strong: #33383E;
+    --skylime-blue: #3D9FEB; --skylime-blue-hover: #56A5E3; --skylime-blue-subtle-bg: #173A57; --skylime-blue-subtle-text: #85B7EB;
+    --skylime-lime: #A8C93D; --skylime-lime-text-on: #10160A;
+    --skylime-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+    --status-success-bg: #1F3309; --status-success-text: #97C459;
+    --status-warning-bg: #3D2E0A; --status-warning-text: #EF9F27;
+    --status-error-bg: #3D1414; --status-error-text: #F09595;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--skylime-bg-primary); color: var(--skylime-text-primary);
+    font-family: var(--font-sans); font-size: var(--text-base); font-weight: 400; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; padding: var(--space-6) var(--space-4) var(--space-8);
+  }
+  .pagehead { max-width: 420px; margin: 0 auto var(--space-4); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+  .pagehead .t { font-size: var(--text-sm); color: var(--skylime-text-secondary); }
+
+  .phone {
+    width: 100%; max-width: 420px; margin: 0 auto; background: var(--skylime-bg-surface);
+    border: 0.5px solid var(--skylime-border-default); border-radius: 28px;
+    box-shadow: var(--skylime-shadow-card); overflow: hidden; position: relative;
+  }
+  .screen-scroll { height: min(760px, calc(100vh - 150px)); min-height: 420px; overflow-y: auto; padding: var(--space-5) var(--space-4) 88px; background: var(--skylime-bg-primary); }
+  .screen { display: none; } .screen.active { display: block; }
+
+  .apphead { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-5); }
+  .apphead h1 { font-size: var(--text-xl); font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+  .apphead .ver { font-size: var(--text-xs); color: var(--skylime-text-secondary); }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: var(--radius-full); }
+  .chip-brand { background: var(--skylime-blue-subtle-bg); color: var(--skylime-blue-subtle-text); }
+
+  h2.sec { font-size: var(--text-sm); font-weight: 500; color: var(--skylime-text-secondary); margin: 0 0 var(--space-2); }
+  h3.exname { font-size: var(--text-lg); font-weight: 500; margin: 0 0 var(--space-2); }
+
+  .card { background: var(--skylime-bg-surface); border: 0.5px solid var(--skylime-border-default); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--skylime-shadow-card); margin-bottom: var(--space-3); }
+
+  label.lbl { display: block; font-size: var(--text-xs); color: var(--skylime-text-secondary); font-weight: 500; margin-bottom: 5px; }
+  .input, .select {
+    background: var(--skylime-bg-surface); border: 0.5px solid var(--skylime-border-strong); border-radius: var(--radius-md);
+    padding: 9px 10px; font-size: var(--text-base); font-family: inherit; color: var(--skylime-text-primary); width: 100%;
+  }
+  .input::placeholder { color: var(--skylime-text-tertiary); }
+  .input:focus, .select:focus { outline: none; border-color: var(--skylime-blue); box-shadow: 0 0 0 3px var(--skylime-blue-subtle-bg); }
+  .field { margin-bottom: var(--space-3); } .field:last-child { margin-bottom: 0; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  .input-with-btn { display: flex; gap: var(--space-2); } .input-with-btn .input { flex: 1; min-width: 0; }
+
+  .btn { font-family: inherit; font-size: var(--text-base); font-weight: 500; border-radius: var(--radius-full); cursor: pointer; border: none; padding: 10px 20px; }
+  .btn-primary { background: var(--skylime-blue); color: #fff; } .btn-primary:hover { background: var(--skylime-blue-hover); }
+  .btn-accent { background: var(--skylime-lime); color: var(--skylime-lime-text-on); }
+  .btn-outline { background: transparent; color: var(--skylime-blue); border: 1.5px solid var(--skylime-blue); padding: 9px 18px; }
+  .btn-sm { padding: 7px 14px; font-size: var(--text-sm); }
+  .btn-block { width: 100%; }
+
+  /* Lift sets — grip (drag) + delete on the right */
+  .set-head, .set-row { display: grid; grid-template-columns: 22px 22px 1fr 1fr 1fr 18px 20px; gap: 6px; align-items: center; }
+  .set-head { font-size: var(--text-xs); color: var(--skylime-text-secondary); font-weight: 500; padding: 0 2px var(--space-2); }
+  .set-row { padding: 9px 4px; border-radius: var(--radius-sm); margin-bottom: 6px; }
+  .set-row .sn { font-size: var(--text-sm); color: var(--skylime-text-secondary); text-align: center; }
+  .set-row .input { padding: 8px 6px; text-align: center; }
+  .set-row.warmup { background: var(--skylime-bg-surface-muted); }
+  .set-row.warmup .sn, .set-row.myorep .sn, .set-row.drop .sn { color: var(--skylime-text-tertiary); font-weight: 500; }
+  .set-row.myorep { box-shadow: inset 3px 0 0 var(--skylime-blue); }
+  .set-row.drop { box-shadow: inset 3px 0 0 var(--skylime-text-tertiary); }
+  .set-row.done { background: color-mix(in srgb, var(--status-success-text) 13%, transparent); }
+  .set-row.done .input { color: var(--skylime-text-secondary); }
+  .set-row.dragging { opacity: .4; }
+  .grip { display: flex; justify-content: center; color: var(--skylime-text-tertiary); cursor: grab; }
+  .grip:active { cursor: grabbing; } .grip svg { width: 16px; height: 16px; } .grip svg circle { fill: currentColor; }
+  .xbtn { background: none; border: none; color: var(--skylime-text-tertiary); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px; }
+  .xbtn:hover { color: var(--status-error-text); }
+  .cbx { width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--skylime-border-strong); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .cbx.on { background: var(--status-success-text); border-color: var(--status-success-text); }
+  .cbx.on svg { stroke: var(--skylime-bg-surface); }
+  .cbx svg { width: 12px; height: 12px; fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  .last-hint { font-size: var(--text-xs); color: var(--skylime-text-secondary); margin: 0 0 var(--space-3); }
+  .addset { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-2); }
+  .addset .btn-outline { padding: 5px 12px; font-size: var(--text-xs); border-width: 1px; }
+
+  /* Flat Log sections — less boxy */
+  .logsec { padding-bottom: var(--space-4); margin-bottom: var(--space-4); border-bottom: 0.5px solid var(--skylime-border-default); }
+  .logsec.nolast { border-bottom: none; padding-bottom: 0; margin-bottom: var(--space-3); }
+  .exhead { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+  .exhead .input { flex: 1; font-weight: 500; }
+  .exmove { display: flex; gap: 2px; }
+  .exmove button, .exdel { background: none; border: 0.5px solid var(--skylime-border-strong); border-radius: var(--radius-sm); color: var(--skylime-text-secondary); cursor: pointer; width: 26px; height: 26px; font-size: 12px; }
+  .exdel { color: var(--status-error-text); border-color: var(--skylime-border-strong); }
+  .notetoggle { background: none; border: none; padding: 4px 0; color: var(--skylime-blue); font-family: inherit; font-size: var(--text-sm); font-weight: 500; cursor: pointer; }
+  .noteta { display: none; margin-top: var(--space-2); min-height: 60px; resize: vertical; }
+  .noteta.open { display: block; }
+
+  /* Disclosure (History filters) */
+  .disc { border: 0.5px solid var(--skylime-border-default); border-radius: var(--radius-md); margin-bottom: var(--space-3); background: var(--skylime-bg-surface); }
+  .disc-sum { display: flex; align-items: center; gap: var(--space-2); padding: 11px var(--space-4); cursor: pointer; font-size: var(--text-sm); font-weight: 500; color: var(--skylime-text-secondary); }
+  .disc-sum .chev { margin-left: auto; transition: transform .15s; color: var(--skylime-text-tertiary); }
+  .disc.open .disc-sum .chev { transform: rotate(180deg); }
+  .disc-body { display: none; padding: 0 var(--space-4) var(--space-4); } .disc.open .disc-body { display: block; }
+  .fd-badge { background: var(--skylime-blue); color: #fff; border-radius: var(--radius-full); padding: 1px 8px; font-size: 11px; font-weight: 500; }
+
+  /* Session cards */
+  .sess { display: flex; align-items: center; gap: var(--space-3); padding: 14px var(--space-4); border: 0.5px solid var(--skylime-border-default); border-radius: var(--radius-md); margin-bottom: var(--space-2); background: var(--skylime-bg-surface); box-shadow: var(--skylime-shadow-card); }
+  .sess:hover { border-color: var(--skylime-border-strong); }
+  .sess .d { font-weight: 500; } .sess .spacer { flex: 1; }
+  .sess .del { color: var(--status-error-text); font-size: var(--text-sm); cursor: pointer; }
+  .badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: var(--radius-full); }
+  .badge-brand { background: var(--skylime-blue-subtle-bg); color: var(--skylime-blue-subtle-text); }
+  .badge-muted { background: var(--skylime-bg-surface-muted); color: var(--skylime-text-secondary); }
+  .badge-success { background: var(--status-success-bg); color: var(--status-success-text); }
+  .badge-warning { background: var(--status-warning-bg); color: var(--status-warning-text); }
+  .badge-error { background: var(--status-error-bg); color: var(--status-error-text); }
+
+  /* Stats: challenge grid + charts */
+  .cg-controls { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-bottom: var(--space-4); }
+  .cg-sub { font-size: var(--text-sm); color: var(--skylime-text-secondary); margin: 0 0 var(--space-4); }
+  .cg-scroll { overflow-x: auto; }
+  table.cg { width: 100%; border-collapse: collapse; }
+  table.cg th { font-size: var(--text-xs); color: var(--skylime-text-secondary); font-weight: 500; padding: 4px 2px; text-align: center; }
+  table.cg th.nm, table.cg td.nm { text-align: left; }
+  table.cg td { padding: 8px 2px; text-align: center; border-top: 0.5px solid var(--skylime-border-default); }
+  .dot { width: 12px; height: 12px; border-radius: var(--radius-full); display: inline-block; background: var(--dot-off); }
+  .dot.on { background: var(--dot-on); }
+  .pill { font-size: var(--text-xs); font-weight: 500; padding: 2px 8px; border-radius: var(--radius-full); }
+  .pill.hit { background: var(--status-success-bg); color: var(--status-success-text); }
+  .pill.miss { background: var(--status-error-bg); color: var(--status-error-text); }
+  .me { color: var(--skylime-blue); font-weight: 500; }
+  .statnum { font-family: var(--font-serif); font-size: var(--text-hero-serif); font-weight: 500; line-height: 1; }
+  .chart { width: 100%; height: 90px; display: block; }
+  .chart .ln { fill: none; stroke: var(--skylime-blue); stroke-width: 2; }
+  .chart .ar { fill: var(--skylime-blue); opacity: .12; }
+  .chart .bar { fill: var(--skylime-blue); }
+  .chart .gl { stroke: var(--skylime-border-default); stroke-width: 1; }
+
+  /* Comments + likes */
+  .cmts { margin-top: var(--space-4); border-top: 0.5px solid var(--skylime-border-default); padding-top: var(--space-3); }
+  .cmt { margin-bottom: var(--space-3); }
+  .cmt .who { font-weight: 500; margin-right: 6px; }
+  .cmt .when { font-size: var(--text-xs); color: var(--skylime-text-tertiary); }
+  .cmt .body { color: var(--skylime-text-secondary); font-size: var(--text-sm); margin-top: 1px; }
+  .like { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--skylime-border-strong); background: var(--skylime-bg-surface); color: var(--skylime-text-secondary); cursor: pointer; font-size: var(--text-xs); padding: 4px 9px; border-radius: var(--radius-full); margin-top: 4px; }
+  .like .thumb { filter: grayscale(1); opacity: .45; } .like .n { font-weight: 500; }
+  .like.liked { border-color: var(--skylime-blue); color: var(--skylime-blue-subtle-text); background: var(--skylime-blue-subtle-bg); }
+  .like.liked .thumb { filter: none; opacity: 1; }
+  .cmt-box { display: flex; gap: var(--space-2); margin-top: var(--space-3); } .cmt-box .input { flex: 1; }
+
+  /* Settings rows */
+  .setrow { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-top: 0.5px solid var(--skylime-border-default); }
+  .setrow:first-child { border-top: none; }
+  .setrow .title { font-weight: 500; }
+  .setrow .desc { font-size: var(--text-sm); color: var(--skylime-text-secondary); }
+  .setrow .ctrl { flex-shrink: 0; min-width: 120px; max-width: 150px; }
+  .cardtitle { font-size: var(--text-base); font-weight: 500; margin: 0 0 var(--space-2); }
+  .danger { border-color: var(--status-error-text); }
+  .codepill { font-family: ui-monospace, monospace; background: var(--skylime-bg-surface-muted); border-radius: var(--radius-sm); padding: 6px 10px; font-size: var(--text-sm); letter-spacing: 2px; }
+
+  /* Bottom nav */
+  .nav { position: absolute; left: 0; right: 0; bottom: 0; display: flex; background: var(--skylime-bg-surface); border-top: 0.5px solid var(--skylime-border-default); }
+  .nav button { flex: 1; background: none; border: none; cursor: pointer; padding: 10px 4px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--skylime-text-tertiary); font-family: inherit; font-size: 10px; font-weight: 500; }
+  .nav button.active { color: var(--skylime-blue); }
+  .nav svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  @media (max-width: 380px) {
+    .row2, .cg-controls { grid-template-columns: 1fr; }
+    body { padding-left: var(--space-3); padding-right: var(--space-3); }
+  }
+</style>
+</head>
+<body>
+
+  <div class="pagehead">
+    <span class="t">Hybrid Trainer reskinned with Skylime — preview only (index.html untouched)</span>
+    <button class="btn btn-outline btn-sm" onclick="toggleTheme()"><span id="tl">Light</span></button>
+  </div>
+
+  <div class="phone">
+    <div class="screen-scroll" id="scroll">
+
+      <div class="apphead">
+        <div><h1>Hybrid Trainer</h1><span class="ver">v0.40.0</span></div>
+        <span class="chip chip-brand">● Synced</span>
+      </div>
+
+      <!-- ============ LOG ============ -->
+      <section class="screen active" id="s-log">
+        <div class="logsec">
+          <div class="row2">
+            <div class="field"><label class="lbl">Date</label>
+              <div class="input-with-btn"><input class="input" value="2026-06-10"><button class="btn btn-outline btn-sm">Today</button></div>
+            </div>
+            <div class="field"><label class="lbl">Bodyweight</label><input class="input" placeholder="lb"></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label class="lbl">Start</label><input class="input" value="17:05"></div>
+            <div class="field"><label class="lbl">End</label><input class="input" placeholder="--:--"></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label class="lbl">Type</label>
+              <select class="select" id="logtype" onchange="switchType(this.value)"><option value="lifts">Lifts</option><option value="run">Run</option><option value="cond">Conditioning</option></select>
+            </div>
+            <div class="field"><label class="lbl">Phase</label><input class="input" placeholder="e.g. Hypertrophy"></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label class="lbl">Name</label><input class="input" value="Push day"></div>
+            <div class="field"><label class="lbl">Load template</label><select class="select"><option>— none —</option><option>Push A</option><option>Pull A</option></select></div>
+          </div>
+        </div>
+
+        <!-- LIFTS form -->
+        <div id="form-lifts">
+          <div id="log-exercises">
+            <div class="logsec exblock">
+              <div class="exhead">
+                <input class="input" list="exlist" value="Bench Press">
+                <div class="exmove"><button onclick="moveEx(this,-1)" title="Up">▲</button><button onclick="moveEx(this,1)" title="Down">▼</button></div>
+                <button class="exdel" onclick="delEx(this)" title="Delete exercise">✕</button>
+              </div>
+              <div class="last-hint">Last time · 185×8 · 185×8 · 185×7</div>
+              <div class="set-head"><div></div><div>#</div><div>Weight</div><div>Reps</div><div>RPE</div><div></div><div></div></div>
+              <div class="set-list">
+                <div class="set-row warmup" draggable="true">
+                  <span class="cbx" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+                  <span class="sn">W</span><input class="input" value="135"><input class="input" value="10"><input class="input" placeholder="-">
+                  <button class="xbtn" onclick="delSet(this)">×</button>
+                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
+                </div>
+                <div class="set-row done" draggable="true">
+                  <span class="cbx on" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+                  <span class="sn">1</span><input class="input" value="185"><input class="input" value="8"><input class="input" value="7">
+                  <button class="xbtn" onclick="delSet(this)">×</button>
+                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
+                </div>
+                <div class="set-row done" draggable="true">
+                  <span class="cbx on" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+                  <span class="sn">2</span><input class="input" value="185"><input class="input" value="8"><input class="input" value="8">
+                  <button class="xbtn" onclick="delSet(this)">×</button>
+                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
+                </div>
+                <div class="set-row" draggable="true">
+                  <span class="cbx" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+                  <span class="sn">3</span><input class="input" placeholder="185"><input class="input" placeholder="8"><input class="input" placeholder="7">
+                  <button class="xbtn" onclick="delSet(this)">×</button>
+                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
+                </div>
+              </div>
+              <div class="addset">
+                <button class="btn btn-outline" onclick="addSet(this,'warmup')">+ Warmup</button>
+                <button class="btn btn-outline" onclick="addSet(this,'working')">+ Set</button>
+                <button class="btn btn-outline" onclick="addSet(this,'myorep')">+ Myo</button>
+                <button class="btn btn-outline" onclick="addSet(this,'drop')">+ Drop</button>
+              </div>
+              <button class="notetoggle" onclick="toggleNote(this)">+ Add note</button>
+              <textarea class="input noteta" placeholder="Notes (e.g. felt light, no belt)"></textarea>
+            </div>
+
+            <div class="logsec exblock">
+              <div class="exhead">
+                <input class="input" list="exlist" value="Incline DB Press">
+                <div class="exmove"><button onclick="moveEx(this,-1)" title="Up">▲</button><button onclick="moveEx(this,1)" title="Down">▼</button></div>
+                <button class="exdel" onclick="delEx(this)" title="Delete exercise">✕</button>
+              </div>
+              <div class="last-hint">Last time · 60×10 · 60×10</div>
+              <div class="set-head"><div></div><div>#</div><div>Weight</div><div>Reps</div><div>RPE</div><div></div><div></div></div>
+              <div class="set-list">
+                <div class="set-row" draggable="true">
+                  <span class="cbx" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+                  <span class="sn">1</span><input class="input" placeholder="60"><input class="input" placeholder="10"><input class="input" placeholder="-">
+                  <button class="xbtn" onclick="delSet(this)">×</button>
+                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
+                </div>
+              </div>
+              <div class="addset">
+                <button class="btn btn-outline" onclick="addSet(this,'warmup')">+ Warmup</button>
+                <button class="btn btn-outline" onclick="addSet(this,'working')">+ Set</button>
+                <button class="btn btn-outline" onclick="addSet(this,'myorep')">+ Myo</button>
+                <button class="btn btn-outline" onclick="addSet(this,'drop')">+ Drop</button>
+              </div>
+              <button class="notetoggle" onclick="toggleNote(this)">+ Add note</button>
+              <textarea class="input noteta" placeholder="Notes"></textarea>
+            </div>
+          </div>
+          <div style="margin-bottom:var(--space-4)"><button class="btn btn-accent btn-sm">+ Add exercise</button></div>
+        </div>
+
+        <!-- RUN form -->
+        <div id="form-run" style="display:none">
+          <div class="logsec">
+            <div class="field"><label class="lbl">Run type</label><select class="select"><option>Easy</option><option>Tempo</option><option>Intervals</option><option>Long</option><option>Race</option></select></div>
+            <div class="row2">
+              <div class="field"><label class="lbl">Distance (mi)</label><input class="input" value="5.0"></div>
+              <div class="field"><label class="lbl">Time</label><input class="input" value="42:30"></div>
+            </div>
+            <div class="row2">
+              <div class="field"><label class="lbl">Pace</label><input class="input" value="8:30 /mi"></div>
+              <div class="field"><label class="lbl">Avg HR</label><input class="input" value="148"></div>
+            </div>
+            <button class="notetoggle" onclick="toggleNote(this)">+ Add note</button>
+            <textarea class="input noteta" placeholder="How did the run feel?"></textarea>
+          </div>
+        </div>
+
+        <!-- CONDITIONING form -->
+        <div id="form-cond" style="display:none">
+          <div class="logsec">
+            <div class="field"><label class="lbl">Type</label><select class="select"><option>Erg (row/bike/ski)</option><option>Sled / carry</option><option>Ruck</option><option>Circuit / Hyrox / WOD</option><option>Other</option></select></div>
+            <div class="row2">
+              <div class="field"><label class="lbl">Modality</label><input class="input" value="Row"></div>
+              <div class="field"><label class="lbl">Time</label><input class="input" value="20:00"></div>
+            </div>
+            <div class="row2">
+              <div class="field"><label class="lbl">Distance / result</label><input class="input" value="5000 m"></div>
+              <div class="field"><label class="lbl">RPE</label><input class="input" value="8"></div>
+            </div>
+            <button class="notetoggle" onclick="toggleNote(this)">+ Add note</button>
+            <textarea class="input noteta" placeholder="Notes"></textarea>
+          </div>
+        </div>
+
+        <div class="logsec nolast">
+          <button class="notetoggle" onclick="toggleNote(this)">+ Add workout note</button>
+          <textarea class="input noteta" placeholder="How did the session feel?"></textarea>
+        </div>
+
+        <button class="btn btn-primary btn-block">Finish &amp; save workout</button>
+      </section>
+
+      <!-- ============ HISTORY ============ -->
+      <section class="screen" id="s-history">
+        <div style="display:flex; gap:var(--space-2); margin-bottom:var(--space-3); flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm">Import workouts</button>
+          <button class="btn btn-outline btn-sm">Export all data</button>
+        </div>
+        <div class="disc" id="disc">
+          <div class="disc-sum" onclick="document.getElementById('disc').classList.toggle('open')">
+            <span>Filters</span><span class="fd-badge">1</span><span class="chev">▾</span>
+          </div>
+          <div class="disc-body">
+            <div class="field"><label class="lbl">Sort</label><select class="select"><option>Newest first</option></select></div>
+            <div class="row2">
+              <div class="field"><label class="lbl">Type</label><select class="select"><option>run</option></select></div>
+              <div class="field"><label class="lbl">Date range</label><select class="select"><option>all time</option></select></div>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:var(--text-sm); color:var(--skylime-text-secondary); margin:var(--space-2) 0 var(--space-3);">Tap a session to edit it.</p>
+        <div class="sess"><span class="d">2026-06-10</span><span class="badge badge-brand">run</span><span class="spacer"></span><span class="del">Delete</span></div>
+        <div class="sess"><span class="d">2026-06-09</span><span class="badge badge-muted">lifts</span><span class="spacer"></span><span class="del">Delete</span></div>
+        <div class="sess"><span class="d">2026-06-08</span><span class="badge badge-muted">lifts</span><span class="spacer"></span><span class="del">Delete</span></div>
+      </section>
+
+      <!-- ============ STATS ============ -->
+      <section class="screen" id="s-stats">
+        <div class="card">
+          <h3 class="exname" style="font-size:var(--text-lg)">Spring Lift Challenge</h3>
+          <p class="cg-sub">Lifts · Jun 1 – Jun 30</p>
+          <div class="cg-controls"><select class="select"><option>Spring Lift Challenge</option></select><select class="select"><option>Day</option><option>Week</option></select></div>
+          <div class="cg-scroll">
+          <table class="cg">
+            <thead><tr><th class="nm"></th><th>M</th><th>T</th><th>W</th><th>T</th><th>F</th><th>S</th><th>S</th><th>Wk</th></tr></thead>
+            <tbody>
+              <tr><td class="nm"><span class="me">You</span></td><td><span class="dot on"></span></td><td><span class="dot on"></span></td><td><span class="dot"></span></td><td><span class="dot on"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="pill hit">3/3</span></td></tr>
+              <tr><td class="nm">Mara</td><td><span class="dot on"></span></td><td><span class="dot"></span></td><td><span class="dot on"></span></td><td><span class="dot"></span></td><td><span class="dot on"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="pill hit">3/3</span></td></tr>
+              <tr><td class="nm">Devin</td><td><span class="dot"></span></td><td><span class="dot on"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="dot"></span></td><td><span class="pill miss">1/3</span></td></tr>
+            </tbody>
+          </table>
+          </div>
+          <div class="cmts">
+            <div class="cmt"><span class="who">You</span><span class="when">Jun 10</span><div class="body">Hit a squat PR today, felt strong.</div>
+              <span class="like liked" onclick="tglLike(this)"><span class="thumb">👍</span><span class="n">2</span></span></div>
+            <div class="cmt"><span class="who">Mara</span><span class="when">Jun 10</span><div class="body">Nice work! Keeping pace this week.</div>
+              <span class="like" onclick="tglLike(this)"><span class="thumb">👍</span></span></div>
+            <div class="cmt-box"><input class="input" placeholder="Comment to the group..."><button class="btn btn-primary btn-sm">Post</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="cardtitle">Bodyweight</h3>
+          <div class="cg-sub" style="margin-bottom:var(--space-2)">Last 8 weeks · <span class="statnum" style="font-size:var(--text-xl)">184<span style="font-size:var(--text-sm); color:var(--skylime-text-secondary)"> lb</span></span></div>
+          <svg class="chart" viewBox="0 0 300 90" preserveAspectRatio="none">
+            <path class="ar" d="M0,55 L40,52 L80,58 L120,48 L160,50 L200,42 L240,46 L300,38 L300,90 L0,90 Z"/>
+            <path class="ln" d="M0,55 L40,52 L80,58 L120,48 L160,50 L200,42 L240,46 L300,38"/>
+          </svg>
+        </div>
+
+        <div class="card">
+          <h3 class="cardtitle">Bench Press — est 1RM</h3>
+          <div class="cg-sub" style="margin-bottom:var(--space-2)">Trending up</div>
+          <svg class="chart" viewBox="0 0 300 90" preserveAspectRatio="none">
+            <path class="ar" d="M0,60 L50,58 L100,50 L150,52 L200,40 L250,36 L300,28 L300,90 L0,90 Z"/>
+            <path class="ln" d="M0,60 L50,58 L100,50 L150,52 L200,40 L250,36 L300,28"/>
+          </svg>
+        </div>
+
+        <div class="card">
+          <h3 class="cardtitle">Weekly volume</h3>
+          <div class="cg-sub" style="margin-bottom:var(--space-2)">Sets per week</div>
+          <svg class="chart" viewBox="0 0 300 90" preserveAspectRatio="none">
+            <rect class="bar" x="6"  y="40" width="32" height="50"/><rect class="bar" x="48" y="30" width="32" height="60"/>
+            <rect class="bar" x="90" y="48" width="32" height="42"/><rect class="bar" x="132" y="22" width="32" height="68"/>
+            <rect class="bar" x="174" y="34" width="32" height="56"/><rect class="bar" x="216" y="18" width="32" height="72"/>
+            <rect class="bar" x="258" y="26" width="32" height="64"/>
+          </svg>
+        </div>
+      </section>
+
+      <!-- ============ TEMPLATES ============ -->
+      <section class="screen" id="s-templates">
+        <h2 class="sec">Your templates</h2>
+        <div class="sess"><span class="d">Push A</span><span class="badge badge-muted">lifts</span><span class="spacer"></span><span class="del">Delete</span></div>
+        <div class="sess"><span class="d">Pull A</span><span class="badge badge-muted">lifts</span><span class="spacer"></span><span class="del">Delete</span></div>
+        <div class="sess"><span class="d">Hyrox sim</span><span class="badge badge-muted">conditioning</span><span class="spacer"></span><span class="del">Delete</span></div>
+        <div style="margin-top:var(--space-3); display:flex; gap:var(--space-2);">
+          <button class="btn btn-accent btn-sm">+ New template</button>
+          <button class="btn btn-outline btn-sm">Browse starter library</button>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="screen" id="s-settings">
+        <div class="card">
+          <h3 class="cardtitle">Profile</h3>
+          <div class="setrow"><div><div class="title">Display name</div><div class="desc">Shown to friends.</div></div><input class="input ctrl" value="Johnny"></div>
+          <div class="setrow"><div><div class="title">Avatar</div><div class="desc">Emoji shown by your name.</div></div><select class="select ctrl"><option>🏋️</option><option>🏃</option><option>🔥</option></select></div>
+        </div>
+        <div class="card">
+          <h3 class="cardtitle">Appearance</h3>
+          <div class="setrow"><div><div class="title">Theme</div><div class="desc">Match system or pick.</div></div><select class="select ctrl"><option>Dark</option><option>Light</option><option>Auto</option></select></div>
+          <div class="setrow"><div><div class="title">Time format</div><div class="desc">How times display.</div></div><select class="select ctrl"><option>24-hour</option><option>12-hour</option></select></div>
+        </div>
+        <div class="card">
+          <h3 class="cardtitle">Units &amp; tracking</h3>
+          <div class="setrow"><div><div class="title">Weight unit</div><div class="desc">Doesn't convert old data.</div></div><select class="select ctrl"><option>lb</option><option>kg</option></select></div>
+          <div class="setrow"><div><div class="title">Distance unit</div><div class="desc">For runs.</div></div><select class="select ctrl"><option>mi</option><option>km</option></select></div>
+          <div class="setrow"><div><div class="title">Intensity</div><div class="desc">Shown per working set.</div></div><select class="select ctrl"><option>RPE</option><option>RIR</option><option>Off</option></select></div>
+        </div>
+        <div class="card">
+          <h3 class="cardtitle">Friends</h3>
+          <div class="setrow"><div><div class="title">Your friend code</div><div class="desc">Share to connect.</div></div><span class="codepill">HT-4QK9</span></div>
+          <div class="field" style="margin-top:var(--space-3)"><div class="input-with-btn"><input class="input" placeholder="Add by code or email"><button class="btn btn-primary btn-sm">Add</button></div></div>
+        </div>
+        <div class="card">
+          <h3 class="cardtitle">Challenges</h3>
+          <div class="setrow"><div><div class="title">Spring Lift Challenge</div><div class="desc">3 members · ends Jun 30</div></div><button class="btn btn-outline btn-sm">Manage</button></div>
+          <div style="margin-top:var(--space-3)"><button class="btn btn-accent btn-sm">+ New challenge</button></div>
+        </div>
+        <div class="card">
+          <h3 class="cardtitle">Feedback</h3>
+          <div class="setrow"><div><div class="title">Send feedback</div><div class="desc">Bug or feature request.</div></div><button class="btn btn-outline btn-sm">Send</button></div>
+        </div>
+        <div class="card danger">
+          <h3 class="cardtitle">Danger zone</h3>
+          <div class="setrow"><div><div class="title">Delete all local data</div><div class="desc">No undo.</div></div><button class="btn btn-sm" style="background:var(--status-error-text); color:#fff;">Delete</button></div>
+        </div>
+        <p style="text-align:center; font-size:var(--text-xs); color:var(--skylime-text-tertiary); margin-top:var(--space-4)">v0.40.0 · data lives in this browser</p>
+      </section>
+
+    </div>
+
+    <nav class="nav">
+      <button class="active" data-s="log" onclick="go(this)"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>Log</button>
+      <button data-s="templates" onclick="go(this)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="12" width="18" height="4" rx="1"/></svg>Templates</button>
+      <button data-s="history" onclick="go(this)"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/></svg>History</button>
+      <button data-s="stats" onclick="go(this)"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 4-5"/></svg>Stats</button>
+      <button data-s="settings" onclick="go(this)"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings</button>
+    </nav>
+  </div>
+
+  <datalist id="exlist">
+    <option>Bench Press</option><option>Squat</option><option>Deadlift</option>
+    <option>Overhead Press</option><option>Incline DB Press</option><option>Barbell Row</option>
+  </datalist>
+
+<script>
+  function go(btn){
+    document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById('s-'+btn.dataset.s).classList.add('active');
+    document.getElementById('scroll').scrollTop=0;
+  }
+  function tgl(el){ el.classList.toggle('on'); el.closest('.set-row').classList.toggle('done'); }
+  function tglLike(el){
+    var liked=el.classList.toggle('liked'); var n=el.querySelector('.n'); var cur=n?parseInt(n.textContent):0;
+    cur+=liked?1:-1;
+    if(cur>0){ if(!n){ n=document.createElement('span'); n.className='n'; el.appendChild(n);} n.textContent=cur; } else if(n){ n.remove(); }
+  }
+  function toggleNote(btn){ var ta=btn.nextElementSibling; ta.classList.add('open'); ta.focus(); btn.style.display='none'; }
+  function toggleTheme(){
+    var r=document.documentElement, d=r.getAttribute('data-theme')==='dark';
+    r.setAttribute('data-theme', d?'light':'dark'); document.getElementById('tl').textContent=d?'Dark':'Light';
+  }
+  function switchType(v){
+    document.getElementById('form-lifts').style.display = v==='lifts'?'':'none';
+    document.getElementById('form-run').style.display   = v==='run'?'':'none';
+    document.getElementById('form-cond').style.display  = v==='cond'?'':'none';
+  }
+  // Add / delete sets
+  var GRIP='<svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg>';
+  var CHK='<svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>';
+  function renumber(list){ var n=1; list.querySelectorAll('.set-row').forEach(function(r){ var s=r.querySelector('.sn'); if(r.classList.contains('warmup')){ s.textContent='W'; } else if(r.classList.contains('myorep')){ s.textContent='M'; } else if(r.classList.contains('drop')){ s.textContent='D'; } else { s.textContent=n++; } }); }
+  function addSet(btn, type){
+    var list=btn.closest('.exblock').querySelector('.set-list');
+    var row=document.createElement('div'); row.className='set-row'+(type!=='working'?' '+type:''); row.setAttribute('draggable','true');
+    row.innerHTML='<span class="cbx" onclick="tgl(this)">'+CHK+'</span><span class="sn"></span>'+
+      '<input class="input" placeholder="-"><input class="input" placeholder="-"><input class="input" placeholder="-">'+
+      '<button class="xbtn" onclick="delSet(this)">×</button><span class="grip">'+GRIP+'</span>';
+    list.appendChild(row); renumber(list);
+  }
+  function delSet(btn){ var list=btn.closest('.set-list'); btn.closest('.set-row').remove(); renumber(list); }
+  // Exercises
+  function moveEx(btn,dir){ var ex=btn.closest('.exblock'); if(dir<0&&ex.previousElementSibling) ex.parentNode.insertBefore(ex, ex.previousElementSibling); if(dir>0&&ex.nextElementSibling) ex.parentNode.insertBefore(ex.nextElementSibling, ex); }
+  function delEx(btn){ btn.closest('.exblock').remove(); }
+  // Drag-reorder sets (each .set-list is its own context)
+  document.querySelectorAll('.set-list').forEach(function(list){
+    var dragEl=null;
+    list.addEventListener('dragstart', function(e){ var r=e.target.closest('.set-row'); if(!r||r.parentElement!==list) return; dragEl=r; r.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; });
+    list.addEventListener('dragend', function(){ if(dragEl) dragEl.classList.remove('dragging'); dragEl=null; renumber(list); });
+    list.addEventListener('dragover', function(e){ e.preventDefault(); if(!dragEl) return; var r=e.target.closest('.set-row'); if(!r||r===dragEl||r.parentElement!==list) return; var rect=r.getBoundingClientRect(); var after=(e.clientY-rect.top)/rect.height>0.5; list.insertBefore(dragEl, after?r.nextSibling:r); });
+  });
+</script>
+</body>
+</html>

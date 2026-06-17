@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<!--
+  Skylime design-system PREVIEW — standalone showcase page.
+  NOT part of the Hybrid Trainer app. Touches no app files.
+  Built per SKYLIME.md: light mode default, dark tokens defined alongside
+  (toggle top-right). Demonstrates buttons, cards, a table, badges, inputs.
+-->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skylime — Component Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,500&display=swap" rel="stylesheet">
+<style>
+  /* ---- Tokens: LIGHT MODE (default) ---- */
+  :root {
+    --skylime-bg-primary: #F7F8F7;
+    --skylime-bg-surface: #FFFFFF;
+    --skylime-bg-surface-muted: #F1F2F0;
+    --skylime-text-primary: #141210;
+    --skylime-text-secondary: #6B6F6A;
+    --skylime-text-tertiary: #9A9D97;
+    --skylime-border-default: #E2E4E1;
+    --skylime-border-strong: #D5D8D4;
+    --skylime-blue: #1C80CD;
+    --skylime-blue-hover: #176BAC;
+    --skylime-blue-subtle-bg: #E6F1FB;
+    --skylime-blue-subtle-text: #0C447C;
+    --skylime-lime: #CBF857;
+    --skylime-lime-text-on: #1A2306;
+    --skylime-shadow-card: 0 2px 8px rgba(20, 18, 16, 0.10);
+    --status-success-bg: #EAF3DE;  --status-success-text: #27500A;
+    --status-warning-bg: #FAEEDA;  --status-warning-text: #633806;
+    --status-error-bg:   #FCEBEB;  --status-error-text:   #791F1F;
+
+    /* ---- Non-color scales (shared across modes) ---- */
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-serif: 'Fraunces', Georgia, serif;
+    --text-xs: 12px; --text-sm: 13px; --text-base: 14px; --text-md: 16px;
+    --text-lg: 18px; --text-xl: 22px; --text-2xl: 28px; --text-3xl: 40px;
+    --text-hero-serif: 56px;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+    --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
+    --radius-sm: 8px; --radius-md: 14px; --radius-full: 999px;
+  }
+  /* ---- Tokens: DARK MODE (own tuned set — no light hex reused) ---- */
+  :root[data-theme="dark"] {
+    --skylime-bg-primary: #0F1113;
+    --skylime-bg-surface: #1B1E22;
+    --skylime-bg-surface-muted: #22262A;
+    --skylime-text-primary: #F3F4F2;
+    --skylime-text-secondary: #8C9298;
+    --skylime-text-tertiary: #5C6066;
+    --skylime-border-default: #272B30;
+    --skylime-border-strong: #33383E;
+    --skylime-blue: #3D9FEB;
+    --skylime-blue-hover: #56A5E3;
+    --skylime-blue-subtle-bg: #173A57;
+    --skylime-blue-subtle-text: #85B7EB;
+    --skylime-lime: #A8C93D;
+    --skylime-lime-text-on: #10160A;
+    --skylime-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+    --status-success-bg: #1F3309;  --status-success-text: #97C459;
+    --status-warning-bg: #3D2E0A;  --status-warning-text: #EF9F27;
+    --status-error-bg:   #3D1414;  --status-error-text:   #F09595;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--skylime-bg-primary); color: var(--skylime-text-primary);
+    font-family: var(--font-sans); font-size: var(--text-base); font-weight: 400;
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: var(--space-8) var(--space-5) var(--space-12); }
+
+  /* Headings are SANS (Fraunces is reserved for hero stats + pull-quotes) */
+  h1 { font-size: var(--text-2xl); font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: var(--text-xl); font-weight: 500; margin: 0 0 var(--space-4); }
+  h3 { font-size: var(--text-lg); font-weight: 500; margin: 0; }
+  p  { margin: 0; }
+  .muted { color: var(--skylime-text-secondary); font-size: var(--text-sm); }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: var(--space-2);
+  }
+  .wordmark { display: flex; align-items: center; gap: var(--space-2); }
+  .wordmark .dot { width: 12px; height: 12px; border-radius: var(--radius-full); background: var(--skylime-lime); }
+  .sub { color: var(--skylime-text-secondary); font-size: var(--text-sm); margin: 0 0 var(--space-8); }
+
+  section { margin-top: var(--space-8); }
+  .section-label {
+    font-size: var(--text-sm); color: var(--skylime-text-secondary); font-weight: 500;
+    margin-bottom: var(--space-3);
+  }
+
+  /* ---- Buttons: always pill ---- */
+  .btn {
+    font-family: inherit; font-size: var(--text-base); font-weight: 500;
+    border-radius: var(--radius-full); cursor: pointer; border: none;
+    padding: 10px 20px; transition: background .12s, box-shadow .12s, color .12s;
+  }
+  .btn-primary { background: var(--skylime-blue); color: #FFFFFF; }
+  .btn-primary:hover { background: var(--skylime-blue-hover); }
+  .btn-accent { background: var(--skylime-lime); color: var(--skylime-lime-text-on); } /* the ONE lime per screen */
+  .btn-accent:hover { filter: brightness(0.96); }
+  .btn-outline { background: transparent; color: var(--skylime-blue); border: 1.5px solid var(--skylime-blue); padding: 9px 20px; }
+  .btn-outline:hover { background: var(--skylime-blue-subtle-bg); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+
+  /* ---- Cards: lifted, the one approved shadow ---- */
+  .card {
+    background: var(--skylime-bg-surface);
+    border: 0.5px solid var(--skylime-border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    box-shadow: var(--skylime-shadow-card);
+  }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
+  .card h3 { margin-bottom: var(--space-2); }
+  .card .card-body { color: var(--skylime-text-secondary); font-size: var(--text-sm); }
+
+  /* Hero stat: Fraunces is allowed here (big stat number) */
+  .stat-card { display: flex; flex-direction: column; gap: var(--space-1); }
+  .stat-label { font-size: var(--text-sm); color: var(--skylime-text-secondary); font-weight: 500; }
+  .stat-number { font-family: var(--font-serif); font-size: var(--text-hero-serif); font-weight: 500; line-height: 1; color: var(--skylime-text-primary); }
+  .stat-meta { font-size: var(--text-sm); color: var(--skylime-text-secondary); }
+
+  /* ---- Badges / pills ---- */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: var(--radius-full);
+  }
+  .badge-brand { background: var(--skylime-blue-subtle-bg); color: var(--skylime-blue-subtle-text); }
+  .badge-success { background: var(--status-success-bg); color: var(--status-success-text); }
+  .badge-warning { background: var(--status-warning-bg); color: var(--status-warning-text); }
+  .badge-error   { background: var(--status-error-bg);   color: var(--status-error-text); }
+  .badge-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+  /* ---- Inputs / selects ---- */
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  label.lbl { font-size: var(--text-sm); color: var(--skylime-text-secondary); font-weight: 500; }
+  .input, .select {
+    background: var(--skylime-bg-surface);
+    border: 0.5px solid var(--skylime-border-strong);
+    border-radius: var(--radius-md);
+    padding: 9px 10px; font-size: var(--text-base); font-family: inherit;
+    color: var(--skylime-text-primary); width: 100%;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  .input::placeholder { color: var(--skylime-text-tertiary); }
+  .input:focus, .select:focus {
+    outline: none; border-color: var(--skylime-blue);
+    box-shadow: 0 0 0 3px var(--skylime-blue-subtle-bg);
+  }
+  .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
+
+  /* ---- Table: bordered rows, no zebra ---- */
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    text-align: left; font-size: var(--text-sm); font-weight: 500;
+    color: var(--skylime-text-secondary); padding: 10px 6px;
+    border-bottom: 0.5px solid var(--skylime-border-strong);
+  }
+  tbody td { padding: 10px 6px; font-size: var(--text-base); border-bottom: 0.5px solid var(--skylime-border-default); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.amount { font-variant-numeric: tabular-nums; }
+
+  /* ---- Pull-quote: Fraunces is allowed here ---- */
+  .pullquote {
+    font-family: var(--font-serif); font-weight: 400; font-size: var(--text-xl);
+    line-height: 1.4; color: var(--skylime-text-primary); font-style: italic;
+    border-left: 2px solid var(--skylime-lime); padding-left: var(--space-4); margin: 0;
+  }
+  .pullquote .cite { display: block; font-family: var(--font-sans); font-style: normal; font-size: var(--text-sm); color: var(--skylime-text-secondary); margin-top: var(--space-3); }
+
+  .icon { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; }
+  .note {
+    background: var(--skylime-blue-subtle-bg); color: var(--skylime-blue-subtle-text);
+    border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm); margin-bottom: var(--space-6);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="wordmark"><span class="dot"></span><h1>Skylime</h1></div>
+    <button class="btn btn-outline" id="themeToggle" onclick="toggleTheme()">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <span id="themeLabel">Dark mode</span>
+    </button>
+  </header>
+  <p class="sub">Component preview · light mode default, dark tokens defined alongside</p>
+
+  <div class="note">Standalone showcase — not wired to the Hybrid Trainer app. Restyled with the Skylime tokens from SKYLIME.md.</div>
+
+  <!-- Hero stat (Fraunces allowed) -->
+  <section>
+    <div class="card-grid">
+      <div class="card stat-card">
+        <span class="stat-label">Net revenue · Q2</span>
+        <span class="stat-number">$48,200</span>
+        <span class="stat-meta"><span class="badge badge-success">+12.4%</span> vs last quarter</span>
+      </div>
+      <div class="card stat-card">
+        <span class="stat-label">Open invoices</span>
+        <span class="stat-number">17</span>
+        <span class="stat-meta">3 overdue · 5 pending</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Buttons -->
+  <section>
+    <div class="section-label">Buttons</div>
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn btn-primary">Create invoice</button>
+        <button class="btn btn-accent">Send reminder</button>
+        <button class="btn btn-outline">Cancel</button>
+        <button class="btn btn-primary" disabled>Disabled</button>
+      </div>
+      <p class="muted" style="margin-top:var(--space-4)">Primary = blue. Exactly one lime accent per screen ("Send reminder"). Outline = tertiary. All pill-shaped.</p>
+    </div>
+  </section>
+
+  <!-- Inputs -->
+  <section>
+    <div class="section-label">Inputs</div>
+    <div class="card">
+      <div class="field-row">
+        <div class="field">
+          <label class="lbl" for="f-name">Client name</label>
+          <input class="input" id="f-name" type="text" placeholder="Acme Corp">
+        </div>
+        <div class="field">
+          <label class="lbl" for="f-status">Status filter</label>
+          <select class="select" id="f-status">
+            <option>All</option><option>Paid</option><option>Pending</option><option>Overdue</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Cards -->
+  <section>
+    <div class="section-label">Cards</div>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Auto-reconciliation</h3>
+        <p class="card-body" style="margin-top:var(--space-2)">Matches incoming payments to open invoices automatically, flagging only the exceptions for review.</p>
+        <div style="margin-top:var(--space-4)"><span class="badge badge-brand">Beta</span></div>
+      </div>
+      <div class="card">
+        <h3>Payout schedule</h3>
+        <p class="card-body" style="margin-top:var(--space-2)">Funds settle to your account on a rolling two-day cycle. Next payout is queued for Friday.</p>
+        <div style="margin-top:var(--space-4)"><span class="badge badge-success">On track</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Table -->
+  <section>
+    <div class="section-label">Table</div>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>Invoice</th><th>Client</th><th>Amount</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>#1042</td><td>Acme Corp</td><td class="amount">$4,800</td><td><span class="badge badge-success">Paid</span></td></tr>
+          <tr><td>#1041</td><td>Northwind Ltd</td><td class="amount">$2,150</td><td><span class="badge badge-warning">Pending</span></td></tr>
+          <tr><td>#1040</td><td>Globex</td><td class="amount">$9,300</td><td><span class="badge badge-error">Overdue</span></td></tr>
+          <tr><td>#1039</td><td>Initech</td><td class="amount">$1,275</td><td><span class="badge badge-success">Paid</span></td></tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:var(--space-4)">Bordered rows, no zebra striping. Status shown as badges, never plain colored text.</p>
+    </div>
+  </section>
+
+  <!-- Badges -->
+  <section>
+    <div class="section-label">Badges</div>
+    <div class="card">
+      <div class="badge-row">
+        <span class="badge badge-brand">Brand pill</span>
+        <span class="badge badge-success">Paid</span>
+        <span class="badge badge-warning">Pending</span>
+        <span class="badge badge-error">Overdue</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pull-quote (Fraunces allowed) -->
+  <section>
+    <div class="section-label">Pull-quote</div>
+    <div class="card">
+      <blockquote class="pullquote">
+        "Skylime made our ops dashboard feel like a product people actually want to open."
+        <span class="cite">— Operations lead, fintech pilot</span>
+      </blockquote>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  function toggleTheme() {
+    var root = document.documentElement;
+    var dark = root.getAttribute('data-theme') === 'dark';
+    root.setAttribute('data-theme', dark ? 'light' : 'dark');
+    document.getElementById('themeLabel').textContent = dark ? 'Dark mode' : 'Light mode';
+  }
+</script>
+</body>
+</html>
