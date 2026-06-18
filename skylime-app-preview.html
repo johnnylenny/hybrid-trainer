@@ -90,22 +90,24 @@
   .btn-block { width: 100%; }
 
   /* Lift sets — grip (drag) + delete on the right */
-  .set-head, .set-row { display: grid; grid-template-columns: 22px 22px 1fr 1fr 1fr 18px 20px; gap: 6px; align-items: center; }
+  .set-head, .set-row { display: grid; grid-template-columns: 22px 22px 1fr 1fr 1fr 20px; gap: 6px; align-items: center; }
   .set-head { font-size: var(--text-xs); color: var(--skylime-text-secondary); font-weight: 500; padding: 0 2px var(--space-2); }
-  .set-row { padding: 9px 4px; border-radius: var(--radius-sm); margin-bottom: 6px; }
+  /* Swipe-to-delete: a row sits over a red "Delete" backing inside an overflow-clipped wrap */
+  .set-wrap { position: relative; overflow: hidden; border-radius: var(--radius-sm); margin-bottom: 6px; }
+  .set-del { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; padding-right: var(--space-4); background: var(--status-error-text); color: #fff; font-size: var(--text-sm); font-weight: 500; }
+  .set-row { padding: 9px 4px; border-radius: var(--radius-sm); position: relative; background: var(--skylime-bg-primary); transition: transform .18s ease; touch-action: pan-y; }
+  .set-row.swiping { transition: none; }
   .set-row .sn { font-size: var(--text-sm); color: var(--skylime-text-secondary); text-align: center; }
   .set-row .input { padding: 8px 6px; text-align: center; }
   .set-row.warmup { background: var(--skylime-bg-surface-muted); }
   .set-row.warmup .sn, .set-row.myorep .sn, .set-row.drop .sn { color: var(--skylime-text-tertiary); font-weight: 500; }
   .set-row.myorep { box-shadow: inset 3px 0 0 var(--skylime-blue); }
   .set-row.drop { box-shadow: inset 3px 0 0 var(--skylime-text-tertiary); }
-  .set-row.done { background: color-mix(in srgb, var(--status-success-text) 13%, transparent); }
+  .set-row.done { background: color-mix(in srgb, var(--status-success-text) 14%, var(--skylime-bg-primary)); }
   .set-row.done .input { color: var(--skylime-text-secondary); }
   .set-row.dragging { opacity: .4; }
   .grip { display: flex; justify-content: center; color: var(--skylime-text-tertiary); cursor: grab; }
   .grip:active { cursor: grabbing; } .grip svg { width: 16px; height: 16px; } .grip svg circle { fill: currentColor; }
-  .xbtn { background: none; border: none; color: var(--skylime-text-tertiary); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px; }
-  .xbtn:hover { color: var(--status-error-text); }
   .cbx { width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--skylime-border-strong); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
   .cbx.on { background: var(--status-success-text); border-color: var(--status-success-text); }
   .cbx.on svg { stroke: var(--skylime-bg-surface); }
@@ -251,33 +253,8 @@
                 <button class="exdel" onclick="delEx(this)" title="Delete exercise">✕</button>
               </div>
               <div class="last-hint">Last time · 185×8 · 185×8 · 185×7</div>
-              <div class="set-head"><div></div><div>#</div><div>Weight</div><div>Reps</div><div>RPE</div><div></div><div></div></div>
-              <div class="set-list">
-                <div class="set-row warmup" draggable="true">
-                  <span class="cbx" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
-                  <span class="sn">W</span><input class="input" value="135"><input class="input" value="10"><input class="input" placeholder="-">
-                  <button class="xbtn" onclick="delSet(this)">×</button>
-                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
-                </div>
-                <div class="set-row done" draggable="true">
-                  <span class="cbx on" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
-                  <span class="sn">1</span><input class="input" value="185"><input class="input" value="8"><input class="input" value="7">
-                  <button class="xbtn" onclick="delSet(this)">×</button>
-                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
-                </div>
-                <div class="set-row done" draggable="true">
-                  <span class="cbx on" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
-                  <span class="sn">2</span><input class="input" value="185"><input class="input" value="8"><input class="input" value="8">
-                  <button class="xbtn" onclick="delSet(this)">×</button>
-                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
-                </div>
-                <div class="set-row" draggable="true">
-                  <span class="cbx" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
-                  <span class="sn">3</span><input class="input" placeholder="185"><input class="input" placeholder="8"><input class="input" placeholder="7">
-                  <button class="xbtn" onclick="delSet(this)">×</button>
-                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
-                </div>
-              </div>
+              <div class="set-head"><div></div><div>#</div><div>Weight</div><div>Reps</div><div>RPE</div><div></div></div>
+              <div class="set-list" data-sets='[{"type":"warmup","w":"135","r":"10","phrpe":"-"},{"type":"working","w":"185","r":"8","rpe":"7","done":true},{"type":"working","w":"185","r":"8","rpe":"8","done":true},{"type":"working","phw":"185","phr":"8","phrpe":"7"}]'></div>
               <div class="addset">
                 <button class="btn btn-outline" onclick="addSet(this,'warmup')">+ Warmup</button>
                 <button class="btn btn-outline" onclick="addSet(this,'working')">+ Set</button>
@@ -295,15 +272,8 @@
                 <button class="exdel" onclick="delEx(this)" title="Delete exercise">✕</button>
               </div>
               <div class="last-hint">Last time · 60×10 · 60×10</div>
-              <div class="set-head"><div></div><div>#</div><div>Weight</div><div>Reps</div><div>RPE</div><div></div><div></div></div>
-              <div class="set-list">
-                <div class="set-row" draggable="true">
-                  <span class="cbx" onclick="tgl(this)"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
-                  <span class="sn">1</span><input class="input" placeholder="60"><input class="input" placeholder="10"><input class="input" placeholder="-">
-                  <button class="xbtn" onclick="delSet(this)">×</button>
-                  <span class="grip"><svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg></span>
-                </div>
-              </div>
+              <div class="set-head"><div></div><div>#</div><div>Weight</div><div>Reps</div><div>RPE</div><div></div></div>
+              <div class="set-list" data-sets='[{"type":"working","phw":"60","phr":"10","phrpe":"-"}]'></div>
               <div class="addset">
                 <button class="btn btn-outline" onclick="addSet(this,'warmup')">+ Warmup</button>
                 <button class="btn btn-outline" onclick="addSet(this,'working')">+ Set</button>
@@ -532,25 +502,78 @@
   // Add / delete sets
   var GRIP='<svg viewBox="0 0 16 16"><circle cx="6" cy="6" r="1.2"/><circle cx="10" cy="6" r="1.2"/><circle cx="6" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/></svg>';
   var CHK='<svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>';
+  function rowLabel(t){ return t==='warmup'?'W':t==='myorep'?'M':t==='drop'?'D':''; }
+  function inputCell(val, ph){ return val ? '<input class="input" value="'+val+'">' : '<input class="input" placeholder="'+(ph||'-')+'">'; }
+  // Build one swipeable set row (wrap > red Delete backing > the row). Grip = drag handle.
+  function buildRow(s){
+    s=s||{type:'working'};
+    var cls='set-row'+(s.type&&s.type!=='working'?' '+s.type:'')+(s.done?' done':'');
+    return '<div class="set-wrap"><div class="set-del"><span>Delete</span></div>'+
+      '<div class="'+cls+'">'+
+      '<span class="cbx'+(s.done?' on':'')+'" onclick="tgl(this)">'+CHK+'</span>'+
+      '<span class="sn">'+rowLabel(s.type)+'</span>'+
+      inputCell(s.w, s.phw)+inputCell(s.r, s.phr)+inputCell(s.rpe, s.phrpe)+
+      '<span class="grip" draggable="true">'+GRIP+'</span>'+
+      '</div></div>';
+  }
   function renumber(list){ var n=1; list.querySelectorAll('.set-row').forEach(function(r){ var s=r.querySelector('.sn'); if(r.classList.contains('warmup')){ s.textContent='W'; } else if(r.classList.contains('myorep')){ s.textContent='M'; } else if(r.classList.contains('drop')){ s.textContent='D'; } else { s.textContent=n++; } }); }
   function addSet(btn, type){
     var list=btn.closest('.exblock').querySelector('.set-list');
-    var row=document.createElement('div'); row.className='set-row'+(type!=='working'?' '+type:''); row.setAttribute('draggable','true');
-    row.innerHTML='<span class="cbx" onclick="tgl(this)">'+CHK+'</span><span class="sn"></span>'+
-      '<input class="input" placeholder="-"><input class="input" placeholder="-"><input class="input" placeholder="-">'+
-      '<button class="xbtn" onclick="delSet(this)">×</button><span class="grip">'+GRIP+'</span>';
-    list.appendChild(row); renumber(list);
+    list.insertAdjacentHTML('beforeend', buildRow({type:type}));
+    wireSwipe(list.lastElementChild.querySelector('.set-row'));
+    renumber(list);
   }
-  function delSet(btn){ var list=btn.closest('.set-list'); btn.closest('.set-row').remove(); renumber(list); }
   // Exercises
   function moveEx(btn,dir){ var ex=btn.closest('.exblock'); if(dir<0&&ex.previousElementSibling) ex.parentNode.insertBefore(ex, ex.previousElementSibling); if(dir>0&&ex.nextElementSibling) ex.parentNode.insertBefore(ex.nextElementSibling, ex); }
   function delEx(btn){ btn.closest('.exblock').remove(); }
-  // Drag-reorder sets (each .set-list is its own context)
+
+  // ---- Swipe-to-delete (pointer events: works with touch AND mouse) ----
+  function wireSwipe(row){
+    var startX=0,startY=0,dx=0,decided='',active=false,pid=null;
+    var THRESH=70;
+    row.addEventListener('pointerdown', function(e){
+      if(e.target.closest('.grip')) return;            // grip = drag-reorder, not swipe
+      if(e.button!==undefined && e.button!==0) return; // left/primary only
+      active=true; decided=''; dx=0; pid=e.pointerId; startX=e.clientX; startY=e.clientY;
+    });
+    row.addEventListener('pointermove', function(e){
+      if(!active) return;
+      var mx=e.clientX-startX, my=e.clientY-startY;
+      if(!decided){
+        if(Math.abs(mx)>8 && Math.abs(mx)>Math.abs(my)+2){ decided='swipe'; row.classList.add('swiping'); try{ row.setPointerCapture(pid); }catch(_){} }
+        else if(Math.abs(my)>10){ active=false; return; }   // vertical -> let it scroll
+        else return;
+      }
+      if(decided==='swipe'){ e.preventDefault(); dx=Math.min(0, mx); row.style.transform='translateX('+dx+'px)'; }
+    });
+    function end(){
+      if(!active) return; active=false; row.classList.remove('swiping');
+      if(decided!=='swipe'){ return; }
+      if(dx < -THRESH){
+        var wrap=row.closest('.set-wrap'), list=row.closest('.set-list');
+        row.style.transform='translateX(-100%)';
+        setTimeout(function(){ if(wrap) wrap.remove(); if(list) renumber(list); }, 170);
+      } else { row.style.transform='translateX(0)'; }
+    }
+    row.addEventListener('pointerup', end);
+    row.addEventListener('pointercancel', end);
+  }
+
+  // ---- Drag-reorder sets via the grip (each .set-list is its own context) ----
+  function wireDragList(list){
+    var dragWrap=null;
+    list.addEventListener('dragstart', function(e){ var g=e.target.closest('.grip'); if(!g) return; var w=g.closest('.set-wrap'); if(!w||w.parentElement!==list) return; dragWrap=w; w.querySelector('.set-row').classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain',''); }catch(_){} });
+    list.addEventListener('dragend', function(){ if(dragWrap) dragWrap.querySelector('.set-row').classList.remove('dragging'); dragWrap=null; renumber(list); });
+    list.addEventListener('dragover', function(e){ e.preventDefault(); if(!dragWrap) return; var w=e.target.closest('.set-wrap'); if(!w||w===dragWrap||w.parentElement!==list) return; var rect=w.getBoundingClientRect(); var after=(e.clientY-rect.top)/rect.height>0.5; list.insertBefore(dragWrap, after?w.nextSibling:w); });
+  }
+
+  // ---- Initial render: build each set list from its data-sets ----
   document.querySelectorAll('.set-list').forEach(function(list){
-    var dragEl=null;
-    list.addEventListener('dragstart', function(e){ var r=e.target.closest('.set-row'); if(!r||r.parentElement!==list) return; dragEl=r; r.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; });
-    list.addEventListener('dragend', function(){ if(dragEl) dragEl.classList.remove('dragging'); dragEl=null; renumber(list); });
-    list.addEventListener('dragover', function(e){ e.preventDefault(); if(!dragEl) return; var r=e.target.closest('.set-row'); if(!r||r===dragEl||r.parentElement!==list) return; var rect=r.getBoundingClientRect(); var after=(e.clientY-rect.top)/rect.height>0.5; list.insertBefore(dragEl, after?r.nextSibling:r); });
+    var data=[]; try{ data=JSON.parse(list.getAttribute('data-sets')||'[]'); }catch(_){}
+    list.innerHTML=data.map(buildRow).join('');
+    renumber(list);
+    list.querySelectorAll('.set-row').forEach(wireSwipe);
+    wireDragList(list);
   });
 </script>
 </body>
