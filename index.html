@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.40.0 — Garmin tempo auto-detect via an easy-HR ceiling
+  HYBRID TRAINER v0.41.0 — standard signup (confirm + reveal) + sign-in auto-adopts local data
   Single HTML file. Loads Chart.js and Supabase client from CDN.
 
   What's new in v0.36.0:
@@ -530,6 +530,16 @@
   .input-with-button { display: flex; gap: 6px; align-items: stretch; }
   .input-with-button input { flex: 1; min-width: 0; }
   .input-with-button button { flex-shrink: 0; white-space: nowrap; }
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 44px; }
+  .pw-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; border-radius: var(--radius-sm);
+    color: var(--text-dim);
+  }
+  .pw-eye:hover { color: var(--text); }
+  .pw-eye svg { width: 18px; height: 18px; display: block; }
   button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
   .btn {
     background: var(--accent); color: var(--accent-text);
@@ -954,7 +964,18 @@
 
     <div class="field" id="signin-password-field">
       <label>Password</label>
-      <input type="password" id="signin-password" placeholder="At least 6 characters" autocomplete="current-password">
+      <div class="pw-wrap">
+        <input type="password" id="signin-password" placeholder="At least 6 characters" autocomplete="current-password">
+        <button type="button" class="pw-eye" aria-label="Show password" onclick="togglePwReveal('signin-password', this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+    </div>
+
+    <div class="field" id="signin-confirm-field" style="display:none">
+      <label>Confirm password</label>
+      <div class="pw-wrap">
+        <input type="password" id="signin-confirm" placeholder="Re-enter your password" autocomplete="new-password">
+        <button type="button" class="pw-eye" aria-label="Show password" onclick="togglePwReveal('signin-confirm', this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
     </div>
 
     <button class="btn" id="signin-submit" style="width:100%" onclick="handleSignInSubmit()">Sign in</button>
@@ -980,7 +1001,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.40.0</small>
+      <small>v0.41.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1302,7 +1323,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.40.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.41.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1340,7 +1361,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.40.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.41.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1501,18 +1522,18 @@ async function onSignedIn() {
     return;
   }
   if (hasLocal && !hasCloud) {
-    // First sign-in on a device with existing data
-    const localCount = state.history.length;
-    const tplCount = state.templates.length;
-    const msg = 'Found ' + localCount + ' session' + (localCount===1?'':'s') +
-                ' and ' + tplCount + ' template' + (tplCount===1?'':'s') +
-                ' on this device that aren\'t in your account yet.\n\n' +
-                'Upload them to your account so they sync across devices?\n\n' +
-                'OK = upload\nCancel = keep local only (you will see an empty account until you upload)';
-    if (await modalConfirm(msg)) {
-      const r = await cloudPushAll();
-      if (r.success) showToast('Uploaded! Your data is now synced to your account.', 'success');
-      else showToast('Upload failed: ' + r.error + '\nYour local data is safe, try again later.', 'error');
+    // First sign-in on a device that already has local data, into a brand-new
+    // (empty) account. Adopt the local data into the account automatically —
+    // no prompt. cloudPushAll stamps every row with this account's user_id, so
+    // your sessions, templates AND settings (display name, units, theme...) get
+    // tied to the signed-in account and start syncing across devices.
+    const r = await cloudPushAll();
+    if (r.success) {
+      backfillTrainingDays(); // seed the friends-grid signal from history
+      const n = state.history.length;
+      showToast('Added your ' + n + ' local workout' + (n===1?'':'s') + ' to this account.', 'success');
+    } else {
+      showToast('Couldn\'t upload your local data: ' + r.error + '\nIt\'s still safe on this device, will retry later.', 'error');
     }
     renderLog();
     return;
@@ -1566,8 +1587,32 @@ function setSignInMode(mode) {
     : 'Welcome back. Sign in to sync workouts across devices.';
   document.getElementById('signin-submit').textContent = isSignUp ? 'Create account' : 'Sign in';
   document.getElementById('signin-password').setAttribute('autocomplete', isSignUp ? 'new-password' : 'current-password');
+  // Confirm-password field is signup-only. Clear it when leaving signup so a
+  // stale value can't block a later sign-in attempt.
+  document.getElementById('signin-confirm-field').style.display = isSignUp ? 'block' : 'none';
+  if (!isSignUp) {
+    const cf = document.getElementById('signin-confirm');
+    cf.value = '';
+    cf.type = 'password'; // re-mask so a re-opened signup starts hidden
+    const cfEye = document.querySelector('#signin-confirm-field .pw-eye');
+    if (cfEye) { cfEye.innerHTML = EYE_SVG; cfEye.setAttribute('aria-label', 'Show password'); }
+  }
   setSignInMsg('', null);
   document.getElementById('signin-extra').style.display = 'none';
+}
+
+// Eye icons for the password reveal toggle. EYE = currently hidden (click to
+// show); EYE_OFF (slashed) = currently visible (click to hide).
+const EYE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+// Show/hide one password field. Each field's eye toggles only its own input.
+function togglePwReveal(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const reveal = input.type === 'password';
+  input.type = reveal ? 'text' : 'password';
+  btn.setAttribute('aria-label', reveal ? 'Hide password' : 'Show password');
+  btn.innerHTML = reveal ? EYE_OFF_SVG : EYE_SVG;
 }
 
 function setSignInMsg(text, kind) {
@@ -1584,6 +1629,10 @@ async function handleSignInSubmit() {
   if (!email || !password) { setSignInMsg('Email and password required.', 'error'); return; }
   if (signInMode === 'signup' && password.length < 6) {
     setSignInMsg('Password must be at least 6 characters.', 'error');
+    return;
+  }
+  if (signInMode === 'signup' && password !== document.getElementById('signin-confirm').value) {
+    setSignInMsg('Passwords don\'t match. Re-enter them.', 'error');
     return;
   }
   setSignInMsg('Working...', 'info');
