@@ -1,7 +1,21 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.42.0 — sign-out hygiene: clear the sync retry queue + backfill flag
+  HYBRID TRAINER v0.43.0 — dead-code sweep: remove the hidden FAB, unused modalAlert, orphaned CSS comment
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.43.0:
+    - Dead-code removal only, no behavior change. Cleared three unused paths
+      found in the 2026-07 audit (_local/AUDIT-2026-07.md):
+      - The floating "+" button (FAB): it shipped display:none and has been
+        permanently hidden since v0.13.0 (~25 releases). Removed the button,
+        the updateFabVisibility() function whose only job was to keep it hidden,
+        its 3 call sites, and the .fab CSS (base rule + narrow-screen override).
+        (F10)
+      - modalAlert(): defined but never called anywhere. Removed. (F9)
+      - An orphaned "/* Narrow screens */" CSS comment that sat above the
+        sign-in CSS it did not describe. Removed. (F19)
+    - No SCHEMA_VERSION change (no data-shape change) — stays 16.
+      APP_VERSION v0.43.0.
 
   What's new in v0.42.0:
     - Bug fix (cross-account data integrity): signing out now clears the cloud
@@ -595,17 +609,6 @@
   }
   .btn-icon:hover { background: var(--surface-2); color: var(--text); }
   .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
-  .fab {
-    position: fixed;
-    bottom: calc(76px + env(safe-area-inset-bottom));
-    right: 16px;
-    background: var(--accent); color: var(--accent-text);
-    width: 56px; height: 56px; border-radius: 50%;
-    font-size: 1.6rem; font-weight: 300;
-    box-shadow: var(--shadow-lg); z-index: 90;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .fab:active { transform: scale(0.95); }
   .exercise-card {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
@@ -808,7 +811,6 @@
     body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
   }
 
-  /* Narrow screens (iPhone Mini = 375pt, and smaller) */
   /* Sign-in screen */
   .signin-overlay {
     position: fixed; inset: 0;
@@ -955,8 +957,6 @@
     .setting-control { min-width: 110px; max-width: 150px; }
     /* Keep the date + Today button on one line, never wrap */
     .input-with-button { flex-wrap: nowrap; }
-    /* Slightly smaller FAB so it doesn't cover content as much */
-    .fab { width: 52px; height: 52px; bottom: calc(72px + env(safe-area-inset-bottom)); }
     /* Add-set buttons can wrap to two rows comfortably */
     .add-set-buttons button { min-width: 64px; }
     h1 { font-size: 1.3rem; }
@@ -1019,7 +1019,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.42.0</small>
+      <small>v0.43.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1113,8 +1113,6 @@
     </div>
   </div>
 </section>
-
-<button class="fab" id="fab-add" onclick="addExercise()" style="display:none">+</button>
 
 <section id="screen-templates" class="screen">
   <h2>Templates</h2>
@@ -1341,7 +1339,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.42.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.43.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1379,7 +1377,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.42.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.43.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -2468,7 +2466,6 @@ document.querySelectorAll('nav.bottom-tabs button').forEach(btn => {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('screen-' + btn.dataset.screen).classList.add('active');
-    updateFabVisibility();
     if (btn.dataset.screen === 'log') renderLog();
     if (btn.dataset.screen === 'templates') renderTemplates();
     if (btn.dataset.screen === 'history') renderHistory();
@@ -2477,11 +2474,6 @@ document.querySelectorAll('nav.bottom-tabs button').forEach(btn => {
     window.scrollTo(0, 0);
   });
 });
-function updateFabVisibility() {
-  // The floating "+" was hard to find on desktop. Replaced by an inline
-  // "+ Add exercise" button in the exercises column, so keep the FAB hidden.
-  document.getElementById('fab-add').style.display = 'none';
-}
 
 function renderLog() {
   const s = state.currentSession;
@@ -2507,7 +2499,6 @@ function renderLog() {
   updateSaveButtonLabel();
 
   onSessionTypeChange();
-  updateFabVisibility();
 
   if (!renderLog._wired) {
     ['session-date','session-bw','session-start','session-end','session-enddate','session-phase','session-name','session-notes']
@@ -2633,7 +2624,6 @@ function onSessionTypeChange() {
   if (type === 'lifts') { renderExercises(); }
   else if (type === 'run') { renderRunForm(); }
   else if (type === 'conditioning') { renderCondForm(); }
-  updateFabVisibility();
   updateSaveButtonLabel();
   saveState();
 }
@@ -5886,7 +5876,7 @@ function escapeJs(str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"
 
 // =====================================================================
 // CUSTOM MODALS + TOASTS  (replace native confirm / alert / prompt)
-// showModal() returns a Promise; modalConfirm/modalAlert/modalPrompt wrap it.
+// showModal() returns a Promise; modalConfirm/modalPrompt wrap it.
 // showToast() is a non-blocking success/error notice.
 // =====================================================================
 let _modalCurrentSettle = null;
@@ -5952,12 +5942,6 @@ function modalConfirm(message, o) {
     { label: o.cancelText || 'Cancel', value: false, variant: 'secondary' },
     { label: o.okText || 'OK', value: true, variant: o.danger ? 'danger' : 'primary' }
   ] }).then(r => r.value === true);
-}
-function modalAlert(message, o) {
-  o = o || {};
-  return showModal({ title: o.title || 'Heads up', message: message, buttons: [
-    { label: o.okText || 'OK', value: true, variant: 'primary' }
-  ] }).then(() => undefined);
 }
 function modalPrompt(message, defaultValue, o) {
   o = o || {};
