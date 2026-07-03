@@ -63,13 +63,14 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - "Finish & Save" flow when ending a workout: set the end time to now (or a few minutes back with one tap), keep a time you already entered, or save with no end time at all — handy for logging old workouts
 - Export and import your data as JSON (with schema versioning), from Settings or the History tab
 - Import your Hevy history from a CSV export (Settings → Data) — each Hevy workout becomes a lifts session, supersets split into separate exercises, drop sets split into separate sets, and re-importing the same file skips duplicates
+- Import a run or ride from a Garmin .TCX file (Settings → Data → Import workouts → From Garmin) — it reads distance, time, pace and heart rate, converts to your units, and guesses the run type (easy, tempo, intervals, long), then opens it on the Log tab to review before saving
 - Send feedback (bug reports or feature requests) from inside the app (Settings → Feedback), signed in or not
 - Import a single workout (or a batch) by pasting JSON (Settings → Data) — with a "Copy AI prompt" button so an AI can turn handwritten notes, a photo, or another app's export into the right format; one workout opens on the Log tab to review before saving
 - Delete your cloud account from inside the app
 
 ## Status
 
-v0.36 — daily-driver prototype with cloud sync (with auto-retry on failed writes), user profiles, multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets, detailed tempo/interval/race run logging, type-based conditioning including a Hyrox/WOD segment tracker, custom in-app modals, a Finish & Save end-time flow, Hevy CSV import plus a paste-JSON workout importer (with an AI-prompt helper), and an in-app feedback form. Lift logging pre-fills each set from your last session and lets you check sets off as done. You can add friends (by code or email), and start time-boxed challenge groups (up to 6, any mix of activities, each member's own weekly goal) with a group comment thread; the Stats grid shows everyone's training consistency side by side — others see only which days you trained, never the session details. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
+v0.41.0 — daily-driver prototype with cloud sync (auto-retry on failed writes), user profiles, and a standard email signup that adopts any workouts you logged locally the first time you sign in. Multi-type templates (all run and conditioning types, with interval and segment editors) plus a starter library and built-in workout presets; detailed tempo/interval/race run logging; type-based conditioning including a Hyrox/WOD segment tracker; custom in-app modals; a Finish & Save end-time flow. Import lifting history from a Hevy CSV, cardio from a Garmin .TCX file (it reads distance/time/pace/HR, converts units, and guesses the run type, with heart-rate-based tempo detection), or any workout by pasting JSON (with an AI-prompt helper); plus an in-app feedback form. Lift logging pre-fills each set from your last session and lets you check sets off as done. You can add friends (by code or email) and start time-boxed challenge groups (up to 6, any mix of activities, each member's own weekly goal) with a group comment thread; the Stats grid shows everyone's training consistency side by side, and others see only which days you trained, never the session details. An in-progress workout survives closing and reopening the app. Works on phone and laptop, signed in or local-only.
 
 ## How to use it
 
@@ -100,7 +101,7 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 ## Roadmap
 
 **Next up:**
-- Import cardio workouts from Garmin / Strava (activity files first — GPX/TCX, then .FIT — then Strava), so you stop hand-entering pace/distance/HR. (Lifting import from Hevy already shipped in v0.25.)
+- More cardio import formats, so you stop hand-entering pace/distance/HR. Garmin .TCX import already ships (v0.39, with heart-rate-based run-type detection added in v0.40); GPX is the next file format, then .FIT (binary), then a Strava connection. Lifting import from Hevy shipped in v0.25.
 
 **The reason this exists:**
 - Combined lifting + cardio fatigue score (the differentiator no other app does for hybrid athletes)
