@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.41.0 — standard signup (confirm + reveal) + sign-in auto-adopts local data
+  HYBRID TRAINER v0.42.0 — sign-out hygiene: clear the sync retry queue + backfill flag
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.42.0:
+    - Bug fix (cross-account data integrity): signing out now clears the cloud
+      retry queue (hybridTrainerSyncQueue). It used to survive sign-out, and
+      because performSyncOp stamps the CURRENT user's id at flush time, a
+      queued failed write from account A could be pushed into account B's data
+      when B signed in on the same device. Found in the 2026-07 audit
+      (_local/AUDIT-2026-07.md, F1).
+    - Also clears the one-time training_days backfill flag
+      (ht_training_days_backfilled_v1) on sign-out — it is per-account work,
+      so a different account signing in on this device now runs its own
+      backfill instead of silently skipping it (audit F13).
+    - Trade-off, on purpose: any writes still queued at sign-out are dropped.
+      That is strictly more consistent than before — sign-out already wiped
+      the local copies of those records, so retrying them later could only
+      resurrect them into the wrong account.
+    - No SCHEMA_VERSION change (no data-shape change) — stays 16.
+      APP_VERSION v0.42.0.
 
   What's new in v0.36.0:
     - Each challenge now has its own COMMENT THREAD, shared with the group. Open a
@@ -1001,7 +1019,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.41.0</small>
+      <small>v0.42.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1323,7 +1341,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.41.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.42.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1361,7 +1379,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.41.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.42.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1428,6 +1446,16 @@ async function checkAuth() {
       // Clear local cache so a different account doesn't see this account's data
       localStorage.removeItem(STORAGE_KEY);
       state = { templates: [], history: [], currentSession: emptySession(), editingHistoryIndex: null };
+      // Drop any queued (failed, awaiting-retry) cloud writes too. performSyncOp
+      // stamps the CURRENT user's id at flush time, so leftovers from this
+      // account would attach to the next account that signs in on this device.
+      // The local copies of those records were just cleared above anyway.
+      syncQueue = [];
+      saveSyncQueue();
+      // The one-time training_days backfill flag is per-ACCOUNT work, not
+      // per-device: clear it so a different account signing in here still
+      // gets its own backfill.
+      localStorage.removeItem(TD_BACKFILL_KEY);
       const card = document.getElementById('delete-account-card');
       if (card) card.style.display = 'none';
       showSignInOverlay();
