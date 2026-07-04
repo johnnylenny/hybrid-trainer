@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.46.0 — first-run legibility: overlay product tagline, "Try it without an account" button, honest signup trade line, Log starter-template route, and two stale/confusing copy fixes
+  HYBRID TRAINER v0.47.0 — social visibility toasts: pending friend requests and challenge invites surface as a toast after sign-in and on reopen; plus the CDN-fail boot restores the "Local only" badge and sign-in route (F17)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.47.0:
+    - Social visibility toasts (path-redesign H0.4). After sign-in, and on
+      every reopen (the same boot re-auth path), a pending friend request or
+      challenge invite now surfaces as a toast that points at where to act:
+      "N friend request(s) waiting. Settings → Friends." and
+      "N challenge invite(s) waiting. Settings → Challenges."
+      - Reuses the existing loadFriends / loadChallenges loaders and showToast.
+        The extra cloud reads are read-only and failure-silent, so a flaky
+        network just means no toast, never an error.
+      - Before this, a pending invite was visible ONLY inside Settings, so the
+        two "accept" steps of the social loop were easy to miss.
+    - Bundled fix (audit F17): when the Supabase client fails to load from the
+      CDN, boot now sets local mode and repaints the header, restoring the
+      "Local only" badge and the "Sign in to sync" button. Before, that path
+      left the user with no sync indicator and no route to sign in.
+    - No SCHEMA_VERSION change (no data-shape change), stays 16.
+      APP_VERSION v0.47.0.
 
   What's new in v0.46.0:
     - First-run legibility (path-redesign H0.3). Copy plus one button style,
@@ -1074,7 +1092,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.46.0</small>
+      <small>v0.47.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1394,7 +1412,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.46.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.47.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1432,7 +1450,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.46.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.47.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1543,12 +1561,39 @@ function showSignInOverlay() {
   updateSyncIndicator();
 }
 
-// Called after a successful sign-in. Handles the four scenarios:
-//   - Cloud empty + local empty: nothing to do
-//   - Cloud empty + local has data: ask to upload
-//   - Cloud has data + local empty: pull
-//   - Cloud has data + local has data: ask to keep cloud or replace with local
+// Entry point after a successful sign-in (also runs on every reopen via the
+// boot re-auth path). Runs the data reconcile, THEN surfaces any pending
+// friend requests / challenge invites as a toast (H0.4). The notify is
+// fire-and-forget and failure-silent, so it can never block or break sign-in.
 async function onSignedIn() {
+  await onSignedInCore();
+  notifyPendingSocial();
+}
+
+// After sign-in / reopen, point the user at pending social actions that
+// otherwise live ONLY inside Settings. Reuses the existing loaders + showToast;
+// every cloud read here is read-only and failure-silent (a network hiccup just
+// means no toast, never an error). Fires on each reopen on purpose — an unmet
+// invite should keep nudging until it is acted on.
+async function notifyPendingSocial() {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  let friendReqs = 0, challengeInvites = 0;
+  try { await loadFriends(); friendReqs = friendsCache.incoming.length; } catch (e) {}
+  try { await loadChallenges(); challengeInvites = challengesCache.invites.length; } catch (e) {}
+  if (friendReqs > 0) {
+    showToast(friendReqs + ' friend request' + (friendReqs === 1 ? '' : 's') + ' waiting. Settings → Friends.', 'info');
+  }
+  if (challengeInvites > 0) {
+    showToast(challengeInvites + ' challenge invite' + (challengeInvites === 1 ? '' : 's') + ' waiting. Settings → Challenges.', 'info');
+  }
+}
+
+// Handles the four sign-in reconcile scenarios:
+//   - Cloud empty + local empty: nothing to do
+//   - Cloud empty + local has data: adopt local into the account
+//   - Cloud has data + local empty: pull
+//   - Cloud has data + local has data: reconcile silently
+async function onSignedInCore() {
   document.getElementById('signin-overlay').style.display = 'none';
   document.getElementById('auth-badge').style.display = 'inline-flex';
   updateAuthBadge();
@@ -6745,8 +6790,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) flus
 if (initSupabase()) {
   checkAuth();
 } else {
-  // No Supabase available (offline, CDN blocked, etc.) — fall back to localStorage-only mode
+  // No Supabase available (offline, CDN blocked, etc.). Fall back to
+  // localStorage-only mode. checkAuth never runs on this path, so we set local
+  // mode and repaint the header ourselves; otherwise the user is stranded with
+  // no "Local only" badge and no "Sign in to sync" route (audit F17).
   console.warn('Supabase unavailable. Running in local-only mode.');
+  appMode = 'local';
+  updateSyncIndicator();
 }
 </script>
 </body>
