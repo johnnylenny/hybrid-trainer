@@ -1,7 +1,23 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.44.0 — draft guards: stop persisting empty interval sets; confirm before a History tap replaces a run/conditioning draft
+  HYBRID TRAINER v0.45.0 — local dates: History range cutoff, volume-chart week, and import date fallbacks use local calendar helpers, not UTC
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.45.0:
+    - Local dates (audit F5 + F6 + F15). Four one-line swaps to the existing
+      local-date helpers (ymdLocal / todayYmd), so date math reads the local
+      calendar instead of shifting into UTC. No data-shape change.
+      - History "last 7/30/90 days" cutoff now uses ymdLocal(cutoff), not
+        cutoff.toISOString().slice(0,10). On a Pacific evening the UTC date is
+        already tomorrow, so the old cutoff was one day too late and dropped the
+        oldest day from the range.
+      - Volume chart weekStart uses ymdLocal(d), so a session is bucketed into
+        its local week.
+      - The two import date fallbacks (Garmin import, generic normalize) use
+        todayYmd(), so a workout with no date defaults to the local day.
+      - The export filename keeps its UTC date (cosmetic, unchanged).
+    - No SCHEMA_VERSION change (no data-shape change), stays 16.
+      APP_VERSION v0.45.0.
 
   What's new in v0.44.0:
     - Draft guards (audit F4 + F3), both confirmed live on device in HT-T1.
@@ -1038,7 +1054,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.44.0</small>
+      <small>v0.45.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1358,7 +1374,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.44.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.45.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1396,7 +1412,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.44.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.45.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4224,7 +4240,7 @@ function renderHistory() {
     const days = parseInt(rangeFilter);
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const cutoffStr = ymdLocal(cutoff);
     filtered = filtered.filter(s => s.date >= cutoffStr);
   }
 
@@ -5159,7 +5175,7 @@ function drawVolumeChart() {
     const d = new Date(dateStr + 'T00:00:00');
     const day = (d.getDay() + 6) % 7;
     d.setDate(d.getDate() - day);
-    return d.toISOString().slice(0, 10);
+    return ymdLocal(d);
   }
   const weeks = {};
   state.history.forEach(s => {
@@ -5632,7 +5648,7 @@ function tcxActivityToSession(activity, opts) {
 
   const session = {
     id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('garmin-' + (a.startIso || secs)),
-    date: date || new Date().toISOString().slice(0, 10),
+    date: date || todayYmd(),
     startTime, endTime, endDate: '', bodyweight: '',
     name: '', phase: (typeof settings !== 'undefined' ? (settings.defaultPhase || '') : ''),
     type: 'lifts', exercises: [], runData: {}, condData: {}, notes: '',
@@ -5784,7 +5800,7 @@ function normalizeImportedSession(raw) {
   }
   if (!['lifts','run','conditioning'].includes(base.type)) base.type = 'lifts';
   if (!base.id || typeof base.id !== 'string') base.id = crypto.randomUUID();
-  if (!base.date || !/^\d{4}-\d{2}-\d{2}$/.test(base.date)) base.date = new Date().toISOString().slice(0, 10);
+  if (!base.date || !/^\d{4}-\d{2}-\d{2}$/.test(base.date)) base.date = todayYmd();
   if (!Array.isArray(base.exercises)) base.exercises = [];
   if (!base.runData || typeof base.runData !== 'object') base.runData = {};
   if (!base.condData || typeof base.condData !== 'object') base.condData = {};
