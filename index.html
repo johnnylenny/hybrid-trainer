@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.45.0 — local dates: History range cutoff, volume-chart week, and import date fallbacks use local calendar helpers, not UTC
+  HYBRID TRAINER v0.46.0 — first-run legibility: overlay product tagline, "Try it without an account" button, honest signup trade line, Log starter-template route, and two stale/confusing copy fixes
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.46.0:
+    - First-run legibility (path-redesign H0.3). Copy plus one button style,
+      no flow change, no data-shape change.
+      - The sign-in overlay now leads with the product one-liner
+        "Lift. Run. Condition. Track all three." above the tabs, so a stranger
+        sees what the app is before the account ask.
+      - "Continue without an account" is now a visible secondary button
+        ("Try it without an account"), same wiring (continueWithoutAccount).
+      - The Create-account sub-line states the trade plainly: an account adds
+        sync and challenges with friends; everything else works without one.
+      - The Log empty state (no templates) gains a "Browse starter templates"
+        route that jumps to Templates with the starter section expanded.
+      - Fixed the stale "Garmin soon" import copy (Garmin shipped in v0.39.0).
+      - Split the invite-picker zero-friends copy so a user with no friends
+        yet no longer reads "everyone's already in".
+    - No SCHEMA_VERSION change (no data-shape change), stays 16.
+      APP_VERSION v0.46.0.
 
   What's new in v0.45.0:
     - Local dates (audit F5 + F6 + F15). Four one-line swaps to the existing
@@ -867,6 +885,7 @@
   }
   .signin-card h2 { color: var(--text); margin-bottom: 4px; text-transform: none; letter-spacing: 0; font-size: 1.25rem; font-weight: 700; }
   .signin-card .sub { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 18px; }
+  .signin-tagline { color: var(--text); font-size: 1rem; font-weight: 600; text-align: center; margin-bottom: 16px; }
   .signin-tabs {
     display: flex;
     background: var(--surface-2);
@@ -1003,6 +1022,7 @@
 <!-- ========== SIGN-IN OVERLAY ========== -->
 <div id="signin-overlay" class="signin-overlay" style="display:none">
   <div class="signin-card">
+    <p class="signin-tagline">Lift. Run. Condition. Track all three.</p>
     <div class="signin-tabs">
       <button class="signin-tab active" id="signin-tab-signin" onclick="setSignInMode('signin')">Sign in</button>
       <button class="signin-tab" id="signin-tab-signup" onclick="setSignInMode('signup')">Create account</button>
@@ -1044,7 +1064,7 @@
     </div>
 
     <div class="signin-skip">
-      <a onclick="continueWithoutAccount()">Continue without an account</a>
+      <button class="btn-secondary" style="width:100%" onclick="continueWithoutAccount()">Try it without an account</button>
       <div class="signin-skip-note">Data stays on this device only. You can sign in later to sync.</div>
     </div>
   </div>
@@ -1054,7 +1074,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.45.0</small>
+      <small>v0.46.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1342,7 +1362,7 @@
     <div class="btn-group" style="margin-bottom:10px">
       <button class="btn-secondary" onclick="openImportChooser()">Import workouts</button>
     </div>
-    <p class="muted">Bring workouts in from another app or your notes (Hevy, Garmin soon, or anything via AI). Adds to your data, it never replaces anything.</p>
+    <p class="muted">Bring workouts in from another app or your notes (Hevy, Garmin, or anything via AI). Adds to your data, it never replaces anything.</p>
   </div>
 
   <h2>Backup &amp; restore</h2>
@@ -1374,7 +1394,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.45.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.46.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1412,7 +1432,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.45.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.46.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1644,7 +1664,7 @@ function setSignInMode(mode) {
   document.getElementById('signin-tab-signin').classList.toggle('active', !isSignUp);
   document.getElementById('signin-tab-signup').classList.toggle('active', isSignUp);
   document.getElementById('signin-sub').textContent = isSignUp
-    ? 'New here. Pick a password — you can also sign in via emailed link later.'
+    ? 'An account adds sync and challenges with friends. Everything else works without one.'
     : 'Welcome back. Sign in to sync workouts across devices.';
   document.getElementById('signin-submit').textContent = isSignUp ? 'Create account' : 'Sign in';
   document.getElementById('signin-password').setAttribute('autocomplete', isSignUp ? 'new-password' : 'current-password');
@@ -3039,6 +3059,8 @@ function renderExercises() {
         <div class="muted" style="margin-bottom:14px">No workout plans yet. Build one once, then load it any time.</div>
         <button class="btn" onclick="addExercise()" style="font-size:1.05rem; padding:14px 20px;">Create a workout plan</button>
         <div class="muted" style="font-size:0.8rem; margin-top:14px">Add your exercises, then tap "Save as Template" to reuse this plan.</div>
+        <div class="muted" style="font-size:0.8rem; margin:16px 0 10px">or start from a starter template</div>
+        <button class="btn-secondary" onclick="browseStarterTemplates()">Browse starter templates</button>
       </div>`;
     }
     return;
@@ -3896,6 +3918,14 @@ async function toggleStarterTemplates() {
   starterShown = !starterShown;
   if (starterShown && !starterLoaded) await loadStarterTemplates();
   renderTemplates();
+}
+// Route from the Log empty state to the starter library, already expanded.
+// Reuses the bottom-nav click so tab active-states stay in sync, then expands
+// the starter section (only if it isn't already open, since toggle flips it).
+async function browseStarterTemplates() {
+  const tabBtn = document.querySelector('nav.bottom-tabs button[data-screen="templates"]');
+  if (tabBtn) tabBtn.click();
+  if (!starterShown) await toggleStarterTemplates();
 }
 function addStarterToMyTemplates(id) {
   // Built-in presets and cloud starters share the same shape; check both.
@@ -6528,7 +6558,9 @@ function renderInvitePicker(cid) {
   const full = ch && ch.members.length >= 6;
   let rows;
   if (full) rows = '<p class="muted">This challenge is full (6 members).</p>';
-  else if (!candidates.length) rows = '<p class="muted">No more friends to invite. Add friends, or everyone\'s already in.</p>';
+  else if (!candidates.length) rows = (friendsCache.accepted || []).length
+    ? '<p class="muted">Everyone you\'re friends with is already in this challenge.</p>'
+    : '<p class="muted">No friends yet. Add friends in the Friends section, then invite them here.</p>';
   else rows = candidates.map(f =>
     '<div class="friend-row"><span class="friend-who">' + escapeHtml(f.name) + '</span>' +
     '<span class="friend-actions"><button class="modal-btn primary" onclick="inviteFriendToChallenge(\'' + cid + '\', \'' + f.userId + '\')">Invite</button></span></div>').join('');
