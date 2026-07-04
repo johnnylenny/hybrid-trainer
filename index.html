@@ -1,7 +1,26 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.43.0 — dead-code sweep: remove the hidden FAB, unused modalAlert, orphaned CSS comment
+  HYBRID TRAINER v0.44.0 — draft guards: stop persisting empty interval sets; confirm before a History tap replaces a run/conditioning draft
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.44.0:
+    - Draft guards (audit F4 + F3), both confirmed live on device in HT-T1.
+      No behavior change to saved data; fixes two ways a draft was mis-handled.
+      - F4: a blank Intervals run form no longer counts as content.
+        renderIntervalSets used to write intervalSets:[] into state on render,
+        and an empty array is truthy, so sessionHasContent() and the type-switch
+        guard both fired on an untouched form (phantom "Replace the current
+        session?" on template load, bogus "will hide your run data" warning).
+        It now reads a local variable and never persists an empty array,
+        mirroring renderCondSegments (its conditioning twin, which already did).
+      - F3: tapping a History session now confirms before discarding a half-typed
+        run or conditioning draft. editHistorySession guarded only
+        exercises.length || notes, so a run/conditioning draft was overwritten
+        with no prompt. Widened to sessionHasContent() || notes. Relies on the
+        F4 fix landing first, or the widened guard would over-prompt on a blank
+        Intervals form.
+    - No SCHEMA_VERSION change (no data-shape change) — stays 16.
+      APP_VERSION v0.44.0.
 
   What's new in v0.43.0:
     - Dead-code removal only, no behavior change. Cleared three unused paths
@@ -1019,7 +1038,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.43.0</small>
+      <small>v0.44.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1339,7 +1358,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.43.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.44.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1377,7 +1396,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.43.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.44.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -2680,8 +2699,12 @@ function renderRunForm() {
 // Stored in runData.intervalSets. Inputs update the model live via oninput,
 // so typing never triggers a re-render (no focus loss); only add/remove do.
 function renderIntervalSets(rd) {
-  if (!rd.intervalSets) rd.intervalSets = [];
-  const rows = rd.intervalSets.map((set, i) => `
+  // Read a local variable; never write [] into state. An empty array is truthy,
+  // so persisting it here made a blank Intervals form count as content (phantom
+  // "Replace the current session?" and bogus type-switch warnings). Mirrors
+  // renderCondSegments, which deliberately never persists an empty segments array.
+  const sets = Array.isArray(rd.intervalSets) ? rd.intervalSets : [];
+  const rows = sets.map((set, i) => `
     <div class="card compact" style="margin-bottom:8px">
       <div class="header-row" style="margin-bottom:6px">
         <strong>Set ${i + 1}</strong>
@@ -4146,7 +4169,12 @@ async function clearSession() {
   saveState(); renderLog();
 }
 async function editHistorySession(idx) {
-  if (state.currentSession.exercises.length > 0 || state.currentSession.notes) {
+  // Guard the draft before replacing it. The old check saw only lift exercises
+  // and notes, so a half-typed run or conditioning draft was overwritten with no
+  // confirm. sessionHasContent() covers runData/condData (but not notes), so OR
+  // notes back in. Relies on the F4 fix above: a blank Intervals form no longer
+  // persists intervalSets:[], so sessionHasContent() stays false on an empty form.
+  if (sessionHasContent() || state.currentSession.notes) {
     if (!await modalConfirm('You have an unsaved current session. Discard it and edit this one?')) return;
   }
   state.editingHistoryIndex = idx;
