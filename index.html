@@ -1,7 +1,33 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.52.0: social entry points, findable from Stats (H0.10). The Stats challenge picker gains a "+ New challenge" option, and the Friends-overview card gains "Add friends" and "Start a challenge" buttons in its empty states. All three route to the matching Settings section via the new goToSettingsSection() helper (reuses the bottom-nav click, then scrolls the section header into view) or, for the picker option, through setChallengeSelected. No new surface. This closes the discoverability stall two real users hit (HT-T2 finding 1; Path_Redesign 1c loss point 3): the whole social loop lived in Settings with nothing pointing there. Also fixes the friend-code and add-friend rows clipping their button off-screen at phone width (T2 finding 3): at max-width 400px those rows now stack the label above a full-width input+button. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.53.0: the training-day signal is now as durable as a session write (self-heal). The training_days table (a per-day "trained this modality" dot that the friends grid and challenge grid read) was written only by a per-save call (syncTrainingDayFor) plus a one-time backfill. A save whose day-write was lost before it durably queued (tab frozen the instant after Save, so the un-awaited write dies before the catch/enqueue runs), or dropped when a sign-out wipes the retry queue, left the session row in the cloud but no day row, with the badge still reading "Synced". Sessions already self-heal on sign-in (onSignedInCore re-pushes missing local sessions); training_days had no equivalent and the backfill never re-runs (TD_BACKFILL_KEY guard). New reconcileTrainingDays() reads the cloud's day rows and queues a durable trySync upsert for every local (date,type) the cloud lacks; it runs on sign-in (inside cloudPullAll, after the one-time backfill) and on the SAME online + visibilitychange refocus signals the retry queue uses. Upsert-only (never deletes), fail-silent, re-entrancy-guarded. Restored Johnny's lost 2026-07-03 lifts day row. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.53.0:
+    - The training-day signal (training_days: the per-day, per-modality dot the
+      friends grid and challenge grid read) is now as durable as a session
+      write. It used to be written ONLY by a per-save call (syncTrainingDayFor)
+      plus a one-time backfill, so a lost day-write had no way back:
+      - The per-save write is un-awaited and fires right after the session
+        write. If the tab is frozen the instant after Save (routine on a phone),
+        that write can die mid-flight BEFORE the catch that would queue it runs,
+        so it never even reaches the retry queue. The session survives (it is
+        sent first); the day row does not; the badge still reads "Synced".
+      - Even a day-write that DID queue is dropped when a sign-out wipes the
+        retry queue (v0.42.0, added so one account's writes cannot reach the
+        next account on the device).
+      - The one-time backfill is guarded by TD_BACKFILL_KEY, so it never re-runs
+        on a normal reopen to catch the gap.
+    - Fix: new reconcileTrainingDays() self-heal. Reads the cloud's existing day
+      rows once, then queues a durable upsert (through trySync, like every other
+      write) for each local (date,type) the cloud is missing. Runs on sign-in
+      (inside cloudPullAll, after the one-time backfill) and on the SAME online +
+      visibilitychange refocus signals flushSyncQueue already uses. Upsert-only
+      (never deletes; a genuine delete stays with syncTrainingDayFor),
+      fail-silent (an offline refocus is a clean no-op), re-entrancy-guarded.
+    - Restored the one lost row this found live: Johnny's 2026-07-03 lifts day.
+    - Client-only change: no SCHEMA_VERSION change (stays 16), no migration, no
+      RLS change. APP_VERSION v0.53.0.
 
   What's new in v0.52.0:
     - Social entry points are now findable from Stats (T2 finding 1,
@@ -1195,7 +1221,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.52.0</small>
+      <small>v0.53.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1515,7 +1541,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.52.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.53.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1553,7 +1579,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.52.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.53.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -2459,8 +2485,12 @@ async function cloudPullAll() {
     saveState(); // cache locally
     saveSettings();
     setSyncStatus('idle');
-    // One-time backfill of the friends-grid signal from existing history.
+    // The friends-grid signal from history. First load for this account/device:
+    // one bulk backfill. Every later reopen: a lighter self-heal that re-pushes
+    // only the day rows the cloud is missing versus local history, catching a
+    // per-save write that was lost before it durably queued.
     if (!localStorage.getItem(TD_BACKFILL_KEY)) backfillTrainingDays();
+    else reconcileTrainingDays();
     return { success: true };
   } catch (e) {
     console.error('cloudPullAll failed:', e);
@@ -2642,6 +2672,45 @@ async function backfillTrainingDays() {
     try { localStorage.setItem(TD_BACKFILL_KEY, '1'); } catch (e) {}
   } catch (e) {
     console.warn('training_days backfill failed (will retry next load):', e.message || e);
+  }
+}
+// Self-heal: make the shareable day signal as durable as a session write.
+// syncTrainingDayFor is fired un-awaited right after the session write on save,
+// so if the tab is frozen the instant after Save (routine on a phone) it can die
+// mid-flight BEFORE the catch that queues it runs -- not even reaching the retry
+// queue -- and a sign-out wipes the queue, dropping any that DID queue. The
+// session row survives (it is sent first); the day row does not; the badge still
+// reads "Synced". Sessions already reconcile on sign-in (onSignedInCore re-pushes
+// missing local sessions); training_days had no equivalent, and backfill never
+// re-runs (TD_BACKFILL_KEY). This reads the cloud's day rows once, then queues a
+// durable upsert (through trySync, like every other write) for each local
+// (date,type) the cloud is missing. Upsert-only: never deletes (a genuine delete
+// stays with syncTrainingDayFor). Runs on sign-in and on the same online +
+// visibilitychange refocus signals the retry queue uses. Fail-silent and
+// re-entrancy-guarded, so an offline refocus is a clean no-op.
+let _reconcilingTrainingDays = false;
+async function reconcileTrainingDays() {
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  if (_reconcilingTrainingDays) return;
+  _reconcilingTrainingDays = true;
+  try {
+    const { data, error } = await sb.from('training_days')
+      .select('date, type').eq('user_id', currentUser.id);
+    if (error) throw error;
+    const cloudSet = new Set((data || []).map(r => r.date + '|' + r.type));
+    const seen = new Set();
+    state.history.forEach(h => {
+      if (!h.date || !h.type) return;
+      const k = h.date + '|' + h.type;
+      if (seen.has(k) || cloudSet.has(k)) return; // already local-deduped or already in cloud
+      seen.add(k);
+      // Missing in the cloud: queue a durable upsert (rides trySync's retry queue).
+      trySync({ kind: 'trainingDay', entity: 'trainingDay', id: k, present: true, date: h.date, type: h.type });
+    });
+  } catch (e) {
+    console.warn('training_days reconcile skipped:', e.message || e);
+  } finally {
+    _reconcilingTrainingDays = false;
   }
 }
 function cloudDeleteTemplate(templateId) {
@@ -7032,6 +7101,16 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) flus
 // appears on refocus without navigating (finding H0.9). No polling timer.
 window.addEventListener('online', () => refreshOpenSocialSurface());
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOpenSocialSurface(); });
+
+// The training_days signal must be as durable as a session write. A per-save
+// write can be lost before it durably queues (tab frozen right after Save) or
+// dropped when a sign-out wipes the retry queue. Self-heal on the SAME refocus
+// signals: read the cloud's day rows and re-push any missing versus local
+// history. Cloud-only, fail-silent, re-entrancy-guarded (a no-op when offline or
+// already in sync), so it is safe to wire unconditionally. Sign-in is covered
+// separately inside cloudPullAll.
+window.addEventListener('online', () => reconcileTrainingDays());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reconcileTrainingDays(); });
 
 // Boot Supabase auth last so the app is rendered behind the sign-in overlay
 if (initSupabase()) {
