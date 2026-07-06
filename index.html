@@ -1,7 +1,29 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.51.0 — social surfaces refresh on refocus (H0.9). The Friends/Challenges settings sections and the Stats challenge grid + comments now re-pull and re-render when the tab regains focus or the network returns, using the same online/visibilitychange signals the sync queue already uses. So a friend request, comment, or training dot posted on another device now appears on refocus without navigating away and back. Cloud-only; reads are failure-silent; in-progress input (a friend code, a comment draft) is preserved across the repaint. No realtime subscriptions or polling timers (rejected as complexity ahead of need). Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.52.0: social entry points, findable from Stats (H0.10). The Stats challenge picker gains a "+ New challenge" option, and the Friends-overview card gains "Add friends" and "Start a challenge" buttons in its empty states. All three route to the matching Settings section via the new goToSettingsSection() helper (reuses the bottom-nav click, then scrolls the section header into view) or, for the picker option, through setChallengeSelected. No new surface. This closes the discoverability stall two real users hit (HT-T2 finding 1; Path_Redesign 1c loss point 3): the whole social loop lived in Settings with nothing pointing there. Also fixes the friend-code and add-friend rows clipping their button off-screen at phone width (T2 finding 3): at max-width 400px those rows now stack the label above a full-width input+button. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.52.0:
+    - Social entry points are now findable from Stats (T2 finding 1,
+      path-redesign H0.10). Two real users stalled because every social control
+      lived in Settings with nothing pointing there.
+      - The Stats challenge picker gains a "+ New challenge" option; choosing it
+        routes to Settings -> Challenges (setChallengeSelected intercepts the
+        value and leaves the current grid selection untouched, so the picker
+        resets on the next Stats render).
+      - The Friends-overview card gains "Add friends" and "Start a challenge"
+        buttons, shown for a signed-in user with no friends yet and/or no
+        challenge yet. Both call the new goToSettingsSection() helper, which
+        reuses the bottom-nav click and scrolls the matching Settings section
+        header into view. When a challenge already exists the picker's option
+        covers the route, so the "Start a challenge" button is dropped.
+    - Friend-code and add-friend rows no longer clip their button off-screen at
+      phone width (T2 finding 3). At max-width 400px the .friend-input-row rows
+      stack the label above a full-width input+button; kept side-by-side, the
+      flex:0 0 auto control held the text input's intrinsic width and pushed the
+      button past the overflow:hidden card edge.
+    - Client-only change: no SCHEMA_VERSION change (stays 16), no migration, no
+      RLS change. APP_VERSION v0.52.0.
 
   What's new in v0.51.0:
     - Social surfaces now refresh on refocus (T2 finding 2, path-redesign H0.9).
@@ -1102,6 +1124,12 @@
     .card { overflow: hidden; }
     /* Settings rows: let the control breathe */
     .setting-control { min-width: 110px; max-width: 150px; }
+    /* Friends: at phone width, stack the label above the input+button so the
+       Add/Copy button never clips. The .setting-control is flex:0 0 auto, so
+       kept side-by-side it holds the text input's intrinsic width and pushes
+       the button past the overflow:hidden card edge (HT-T2 finding 3). */
+    .friend-input-row { flex-direction: column; }
+    .friend-input-row .setting-control { width: 100%; }
     /* Keep the date + Today button on one line, never wrap */
     .input-with-button { flex-wrap: nowrap; }
     /* Add-set buttons can wrap to two rows comfortably */
@@ -1167,7 +1195,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.51.0</small>
+      <small>v0.52.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1352,12 +1380,12 @@
     </div>
   </div>
 
-  <h2>Friends</h2>
+  <h2 id="friends-heading">Friends</h2>
   <div class="card" id="friends-card">
     <div id="friends-content"></div>
   </div>
 
-  <h2>Challenges</h2>
+  <h2 id="challenges-heading">Challenges</h2>
   <div class="card" id="challenges-card">
     <div id="challenges-content"></div>
   </div>
@@ -1487,7 +1515,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.51.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.52.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1525,7 +1553,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.51.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.52.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4812,6 +4840,7 @@ function challengeCardHtml() {
     let opts = opt('overview', 'Friends overview', selected === 'overview');
     if (active.length) opts += '<optgroup label="Challenges">' + active.map(c => opt(c.id, c.name, selected === c.id)).join('') + '</optgroup>';
     if (archived.length) opts += '<optgroup label="Archived">' + archived.map(c => opt(c.id, c.name, selected === c.id)).join('') + '</optgroup>';
+    opts += opt('__new', '+ New challenge', false); // routes to Settings -> Challenges (setChallengeSelected)
     pickerSel = '<select aria-label="Challenge" onchange="setChallengeSelected(this.value)">' + opts + '</select>';
   }
 
@@ -4974,17 +5003,30 @@ function overviewViewHtml(pickerSel) {
   if (appMode !== 'cloud' || !currentUser) {
     note = 'Sign in and add friends (Settings → Friends) to compare training here, or start a challenge group.';
   } else if (challengeFriends.length) {
-    note = 'You and your friends. A dot only means a session of this type happened that day — no weights, paces, or notes are shared. Your weekly goal saves to this browser. Pick a challenge above to comment with a group.';
+    const hasChallenges = (challengesCache.mine || []).length > 0;
+    note = 'You and your friends. A dot only means a session of this type happened that day. No weights, paces, or notes are shared. Your weekly goal saves to this browser.' + (hasChallenges ? ' Pick a challenge above to comment with a group.' : '');
   } else {
-    note = 'Just you so far. Add friends in Settings → Friends, or start a challenge group. Your weekly goal saves to this browser.';
+    note = 'Just you so far. Your weekly goal saves to this browser.';
   }
-  // Overview has no comments — those live inside a challenge (pick one above).
+  // Direct routes to the social controls, which live in Settings. Shown for a
+  // signed-in user with no friends yet ("Add friends") and/or no challenge yet
+  // ("Start a challenge") -- the states where the entry point was invisible
+  // (HT-T2 finding 1). With challenges present the picker's "+ New challenge"
+  // already covers the route, so the button is dropped to avoid a duplicate.
+  let actionBtns = '';
+  if (appMode === 'cloud' && currentUser) {
+    if (!challengeFriends.length) actionBtns += '<button class="btn-secondary" onclick="goToSettingsSection(\'friends\')">Add friends</button>';
+    if (!(challengesCache.mine || []).length) actionBtns += '<button class="btn-secondary" onclick="goToSettingsSection(\'challenges\')">Start a challenge</button>';
+  }
+  const actions = actionBtns ? '<div class="btn-group" style="margin-top:10px">' + actionBtns + '</div>' : '';
+  // Overview has no comments. Those live inside a challenge (pick one above).
   return '<div class="chart-card" id="challenge-card">' +
     '<h3>' + mod.name + '</h3>' +
     '<div class="chart-sub">' + sub + '</div>' +
     '<div class="cg-controls">' + (pickerSel || '') + modSel + viewSel + goalSel + '</div>' +
     '<div style="overflow-x:auto;"><table class="challenge-grid"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="cg-note">' + note + '</div>' +
+    actions +
     '</div>';
 }
 
@@ -4999,6 +5041,10 @@ function setChallengeModality(v) { challengeState.modality = v; refreshChallenge
 function setChallengeView(v) { challengeState.view = v; refreshChallenge(); }
 // Switch the grid between Friends overview and a specific challenge.
 function setChallengeSelected(v) {
+  // "+ New challenge" is a shortcut to the create controls in Settings, not a
+  // selectable grid. Route there and leave the current selection untouched so
+  // the picker resets to it when Stats is reopened.
+  if (v === '__new') { goToSettingsSection('challenges'); return; }
   challengeState.selected = v;
   if (v !== 'overview') {
     const ch = challengesCache.mine.find(c => c.id === v);
@@ -6038,6 +6084,18 @@ function switchToLogTab() {
   document.getElementById('screen-log').classList.add('active');
 }
 
+// Jump from the Stats social card to a Settings section (Friends or Challenges),
+// reusing the bottom-nav click so tab active-states + renderSettings stay in
+// sync, then scrolling the section header into view. This is the discoverability
+// route for a signed-in user who doesn't know the social controls live in
+// Settings (HT-T2 finding 1; Path_Redesign 1c loss point 3). No new surface.
+function goToSettingsSection(section) {
+  const tabBtn = document.querySelector('nav.bottom-tabs button[data-screen="settings"]');
+  if (tabBtn) tabBtn.click();
+  const target = document.getElementById(section === 'challenges' ? 'challenges-heading' : 'friends-heading');
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 // THE CORE. Takes raw session objects, adds them to the user's data.
 // 1 -> load into the Log tab for review (not saved). Many -> merge into
 // history (dedupe by id) with a summary. Returns the count added/loaded.
@@ -6479,7 +6537,7 @@ function renderFriends() {
   }
   const f = friendsCache;
   const codeRow =
-    '<div class="setting-row" style="align-items:flex-start"><div class="setting-label">' +
+    '<div class="setting-row friend-input-row" style="align-items:flex-start"><div class="setting-label">' +
       '<div class="title">Your friend code</div>' +
       '<div class="desc">Share this so friends can add you.</div></div>' +
     '<div class="setting-control" style="max-width:none"><div class="friend-code-display">' +
@@ -6488,7 +6546,7 @@ function renderFriends() {
     '</div></div></div>';
 
   const addRow =
-    '<div class="setting-row" style="align-items:flex-start"><div class="setting-label">' +
+    '<div class="setting-row friend-input-row" style="align-items:flex-start"><div class="setting-label">' +
       '<div class="title">Add a friend</div>' +
       '<div class="desc">By their code (preferred) or email. They get a request to accept.</div></div>' +
     '<div class="setting-control" style="max-width:none">' +
