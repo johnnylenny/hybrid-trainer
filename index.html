@@ -1,7 +1,26 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.49.0 — delete account, completely (H0.6/F2): handleDeleteAccount now wipes the full social footprint (profiles, friendships, training_days, challenge memberships, comments, likes) plus owned challenges (FK cascade), not just sessions/templates/settings. The Settings card, confirm prompt, and success toast are now honest that the auth login record survives until the admin removes it in the dashboard. Needs the new profiles_delete RLS policy (account-delete-profiles-policy.sql). No SCHEMA_VERSION change (stays 16)
+  HYBRID TRAINER v0.50.0 — challenge grid honors the challenge window (H0.8): the per-challenge grid now windows YOUR own days to [start_date, end_date] exactly like every other member's. Own days used to come from full history with no window filter, so each member saw only their own pre-challenge workouts inside a not-yet-started challenge (the asymmetry two real users hit). Before a challenge starts, an explicit "Starts <date>" pre-start state replaces the misleading gray week, and no day outside the window counts toward anyone's Week pill. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.50.0:
+    - Challenge grid honors the challenge window (path-redesign H0.8). Two real
+      users hit "each of us only sees our own workouts in the challenge." Root
+      cause: other members' dots were window-filtered (cloud query .gte/.lte),
+      but YOUR own dots came from full local history with no window filter, so
+      each member saw their own pre/post-challenge workouts leak into the grid.
+      - loadChallengeGridData now filters your own days to [start_date, end_date]
+        exactly like the others' query, so every member is measured on the same
+        window.
+      - Before a challenge starts, the grid shows an explicit "Starts <date>"
+        pre-start state (both members, neutral 0 pills) instead of a week of gray
+        dots that read as "everyone already failing."
+      - No day outside [start_date, end_date] counts toward anyone's Week pill;
+        out-of-window days in a partial first/last week render as hollow dots, not
+        gray "missed" dots. The Friends overview grid is unchanged (no window
+        there, by design).
+    - Client-only fix: no SCHEMA_VERSION change (stays 16), no migration, no RLS
+      change. APP_VERSION v0.50.0.
 
   What's new in v0.49.0:
     - Delete account, completely (path-redesign H0.6, audit F2). Deleting your
@@ -861,9 +880,11 @@
   .cg-dot { display: inline-block; width: 13px; height: 13px; border-radius: 50%; }
   .cg-dot.on { background: var(--accent); }
   .cg-dot.off { background: var(--surface-3); }
+  .cg-dot.pre { background: transparent; border: 1px solid var(--border); } /* outside the challenge window / not started yet */
   .cg-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
   .cg-pill.hit { background: var(--accent); color: var(--accent-text); }
   .cg-pill.miss { background: var(--danger); color: #fff; }
+  .cg-pill.pre { background: var(--surface-3); color: var(--text-muted); } /* pre-start: neutral zero, not a red miss */
   .cg-note { font-size: 0.72rem; color: var(--text-dim); margin: 10px 0 4px; }
   .cg-comments { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; max-height: 260px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .cg-comment { font-size: 0.85rem; margin-bottom: 8px; }
@@ -1126,7 +1147,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.49.0</small>
+      <small>v0.50.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1446,7 +1467,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.49.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.50.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1484,7 +1505,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.49.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.50.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4743,7 +4764,11 @@ async function loadChallengeGridData(ch) {
       (data || []).forEach(r => { (byUser[r.user_id] = byUser[r.user_id] || new Set()).add(r.date + '|' + r.type); });
     }
   } catch (e) { console.warn('loadChallengeGridData failed:', e.message || e); }
-  const myDays = buildDaysSet(state.history);
+  // Window MY own days to the challenge range, exactly like the others' query
+  // above (.gte start / .lte end). Without this, my pre/post-challenge history
+  // leaked into the grid while everyone else's was filtered -- the asymmetry two
+  // real users hit ("each of us only sees our own workouts"). v0.50.0.
+  const myDays = buildDaysSet((state.history || []).filter(h => h.date >= ch.start_date && h.date <= ch.end_date));
   challengeGridCache[ch.id] = joined.map(m => ({
     userId: m.userId,
     name: m.userId === currentUser.id ? (settings.displayName || 'You') : m.name,
@@ -4781,6 +4806,11 @@ function challengeViewHtml(ch, pickerSel) {
   const modLabel = challengeModalitiesLabel(ch.modalities);
   const arch = challengeIsArchived(ch);
   const view = challengeState.view;
+  // Challenge window guards (v0.50.0). A day only counts toward anyone's pill if
+  // it falls inside [start_date, end_date]; before the challenge starts we show
+  // an explicit pre-start state instead of a misleading gray (all-missed) week.
+  const notStarted = todayYmd() < ch.start_date;
+  const inWindow = (dt) => dt >= ch.start_date && dt <= ch.end_date;
   const people = challengeGridCache[ch.id] ||
     (ch.members || []).filter(m => m.status === 'joined').map(m => ({
       userId: m.userId, name: (currentUser && m.userId === currentUser.id) ? (settings.displayName || 'You') : m.name,
@@ -4797,7 +4827,17 @@ function challengeViewHtml(ch, pickerSel) {
   const invitedNote = invited ? invited + ' invited, not joined yet. ' : '';
 
   let head, body, note;
-  if (view === 'day') {
+  if (notStarted) {
+    // Pre-start: the challenge is entirely in the future. Show who is in plus a
+    // clear "Starts <date>" instead of a week of gray dots that reads as "all
+    // missed". Pills are a neutral 0 -- nothing counts before the window opens.
+    const startLabel = fmtChallengeDate(ch.start_date);
+    head = '<tr><th class="cg-name"></th><th>Starts ' + startLabel + '</th><th></th></tr>';
+    body = people.map(p =>
+      '<tr>' + nameCell(p) + '<td><span class="cg-dot pre" title="Not started yet"></span></td><td><span class="cg-pill pre">0</span></td></tr>'
+    ).join('');
+    note = 'Not started yet. Daily dots and weekly counts begin ' + startLabel + '. ' + invitedNote;
+  } else if (view === 'day') {
     const weekDates = currentWeekDates();
     const dayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
     head = '<tr><th class="cg-name"></th>' +
@@ -4806,6 +4846,9 @@ function challengeViewHtml(ch, pickerSel) {
     body = people.map(p => {
       let trained = 0;
       const cells = weekDates.map(dt => {
+        // Days outside the challenge window never count toward the pill and render
+        // hollow (not a gray "missed" dot) so a partial first/last week is honest.
+        if (!inWindow(dt)) return '<td><span class="cg-dot pre" title="Outside the challenge window"></span></td>';
         const on = trainedAnyOnDay(p, modKeys, dt); if (on) trained++;
         return '<td><span class="cg-dot ' + (on ? 'on' : 'off') + '"></span></td>';
       }).join('');
@@ -4822,7 +4865,9 @@ function challengeViewHtml(ch, pickerSel) {
     body = people.map(p => {
       let weeksHit = 0;
       const cells = weeks.map(w => {
-        const c = w.dates.reduce((n, dt) => n + (trainedAnyOnDay(p, modKeys, dt) ? 1 : 0), 0);
+        // Only in-window days count, so the first/last (partial) week of the range
+        // is measured on its challenge days alone, not the calendar week's spillover.
+        const c = w.dates.reduce((n, dt) => n + ((inWindow(dt) && trainedAnyOnDay(p, modKeys, dt)) ? 1 : 0), 0);
         const hit = c >= p.goal; if (hit) weeksHit++;
         return '<td><span class="cg-dot ' + (hit ? 'on' : 'off') + '" title="' + c + ' day' + (c === 1 ? '' : 's') + '"></span></td>';
       }).join('');
