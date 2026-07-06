@@ -1,7 +1,23 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.47.0 — social visibility toasts: pending friend requests and challenge invites surface as a toast after sign-in and on reopen; plus the CDN-fail boot restores the "Local only" badge and sign-in route (F17)
+  HYBRID TRAINER v0.48.0 — run Save-as-Template parity (H0.5/F7): the run branch of saveCurrentAsTemplate now iterates RUN_TYPES[runType].fields and deep-copies intervalSets, matching saveTemplateDraft and the conditioning branch, so a tempo/intervals/long/race run saved as a template keeps its per-type fields (was hardcoded runType/distance/pace, which dropped tempoPace/warmup/etc). No SCHEMA_VERSION change (stays 16)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.48.0:
+    - Run Save-as-Template parity (path-redesign H0.5, audit F7). Saving a run
+      as a template used to keep only runType/distance/pace, so a tempo,
+      intervals, long, or race run lost every per-type field (a tempo run
+      lost tempoDistance/tempoTime/tempoPace/warmup/cooldown).
+      - The run branch of saveCurrentAsTemplate now mirrors the conditioning
+        branch and saveTemplateDraft: it iterates RUN_TYPES[runType].fields
+        and keeps only the fields you actually filled (blanks dropped).
+      - For the intervals type it deep-copies runData.intervalSets into fresh
+        {reps,distance,goal,recovery} objects (all-blank sets filtered), so
+        editing a loaded template never mutates the saved template.
+      - Backwards-compatible: legacy runs with no runType default to easy, and
+        old runType/distance/pace templates still load and summarize.
+    - No SCHEMA_VERSION change (no data-shape change), stays 16.
+      APP_VERSION v0.48.0.
 
   What's new in v0.47.0:
     - Social visibility toasts (path-redesign H0.4). After sign-in, and on
@@ -1092,7 +1108,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.47.0</small>
+      <small>v0.48.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1412,7 +1428,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.47.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.48.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1450,7 +1466,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.47.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.48.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -3391,9 +3407,26 @@ async function saveCurrentAsTemplate() {
   const type = state.currentSession.type;
   let newTemplate;
   if (type === 'run') {
+    // Mirror the conditioning branch below (and saveTemplateDraft): keep the run
+    // type + only the fields the user filled, and deep-copy intervalSets so
+    // editing a loaded template never mutates the saved one. The old code
+    // hardcoded {runType, distance, pace}, which dropped every per-type field on
+    // a tempo/intervals/long/race run (a tempo run lost tempoPace, warmup, etc).
     const rd = state.currentSession.runData || {};
-    newTemplate = { id: crypto.randomUUID(), name, type, exercises: [],
-      runData: { runType: rd.runType || 'easy', distance: rd.distance || '', pace: rd.pace || '' } };
+    const runType = rd.runType || 'easy';
+    const rTypeDef = RUN_TYPES[runType] || RUN_TYPES.easy;
+    const out = { runType };
+    rTypeDef.fields.forEach(f => {
+      const v = (rd[f.key] || '').trim();
+      if (v) out[f.key] = v;
+    });
+    if (rTypeDef.hasIntervalSets) {
+      const sets = (rd.intervalSets || [])
+        .map(s => ({ reps: (s.reps || '').trim(), distance: (s.distance || '').trim(), goal: (s.goal || '').trim(), recovery: (s.recovery || '').trim() }))
+        .filter(s => s.reps || s.distance || s.goal || s.recovery);
+      if (sets.length) out.intervalSets = sets;
+    }
+    newTemplate = { id: crypto.randomUUID(), name, type, exercises: [], runData: out };
   } else if (type === 'conditioning') {
     const cd = state.currentSession.condData || {};
     const condType = cd.condType;
