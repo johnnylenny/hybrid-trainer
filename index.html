@@ -1,7 +1,27 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.50.0 — challenge grid honors the challenge window (H0.8): the per-challenge grid now windows YOUR own days to [start_date, end_date] exactly like every other member's. Own days used to come from full history with no window filter, so each member saw only their own pre-challenge workouts inside a not-yet-started challenge (the asymmetry two real users hit). Before a challenge starts, an explicit "Starts <date>" pre-start state replaces the misleading gray week, and no day outside the window counts toward anyone's Week pill. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change
+  HYBRID TRAINER v0.51.0 — social surfaces refresh on refocus (H0.9). The Friends/Challenges settings sections and the Stats challenge grid + comments now re-pull and re-render when the tab regains focus or the network returns, using the same online/visibilitychange signals the sync queue already uses. So a friend request, comment, or training dot posted on another device now appears on refocus without navigating away and back. Cloud-only; reads are failure-silent; in-progress input (a friend code, a comment draft) is preserved across the repaint. No realtime subscriptions or polling timers (rejected as complexity ahead of need). Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.51.0:
+    - Social surfaces now refresh on refocus (T2 finding 2, path-redesign H0.9).
+      A real friend test found that requests, comments, and grid dots only
+      appeared after navigating away and back, because the social loaders ran
+      only on sign-in / reopen / tab-open.
+      - New refreshOpenSocialSurface() re-runs the social loaders (loadFriends,
+        loadChallenges, and the open challenge grid's data) and re-renders
+        whichever social surface is open, wired to the SAME online +
+        visibilitychange signals the sync queue's retry already uses.
+      - On Settings it repaints the Friends + Challenges cards; on Stats it
+        repaints the challenge grid + comments (overview or a selected
+        challenge). Cloud-only; each read is wrapped so an offline refocus is a
+        silent no-op, never an error toast.
+      - Text you're mid-typing (a friend code, a comment draft) is preserved
+        across the repaint.
+      - Deliberately NOT added: realtime subscriptions or a polling timer
+        (complexity ahead of need).
+    - Client-only change: no SCHEMA_VERSION change (stays 16), no migration, no
+      RLS change. APP_VERSION v0.51.0.
 
   What's new in v0.50.0:
     - Challenge grid honors the challenge window (path-redesign H0.8). Two real
@@ -1147,7 +1167,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.50.0</small>
+      <small>v0.51.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1467,7 +1487,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.50.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.51.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1505,7 +1525,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.50.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.51.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -6885,6 +6905,58 @@ function closeImportChooser() {
   if (o) o.style.display = 'none';
 }
 
+// ---- Live-ish social refresh on refocus (finding H0.9) ----
+// Social reads (friends, challenges, the grid, comments) only ran on
+// sign-in / reopen / tab-open, so a friend request or a comment posted on
+// another device didn't show until you navigated away and back. Re-pull
+// whichever social surface is open using the SAME refocus signals the sync
+// queue uses (online + visibilitychange, wired at boot below) -- deliberately
+// NO polling timer and NO realtime subscription (complexity ahead of need).
+// Cloud-only; every read is wrapped so an offline refocus is a silent no-op,
+// never an error toast.
+let _socialRefreshing = false;
+// Repaint without eating text the user is mid-typing (a friend code pasted from
+// another app, a half-written comment): snapshot the given input ids, run the
+// repaint, then restore any values that were non-empty.
+function repaintPreservingInputs(ids, repaint) {
+  const saved = ids.map(id => { const el = document.getElementById(id); return el ? el.value : ''; });
+  repaint();
+  ids.forEach((id, i) => { if (saved[i]) { const el = document.getElementById(id); if (el) el.value = saved[i]; } });
+}
+async function refreshOpenSocialSurface() {
+  if (_socialRefreshing) return;
+  if (appMode !== 'cloud' || !sb || !currentUser) return;
+  const btn = document.querySelector('nav.bottom-tabs button.active');
+  const screen = btn ? btn.dataset.screen : '';
+  if (screen !== 'settings' && screen !== 'stats') return; // no social surface open
+  _socialRefreshing = true;
+  try {
+    if (screen === 'settings') {
+      // Friends + Challenges cards. Independent try/catch so one failing read
+      // doesn't stop the other (mirrors notifyPendingSocial).
+      try { await loadFriends(); } catch (e) { console.warn('social refresh: loadFriends failed:', e.message || e); }
+      repaintPreservingInputs(['friend-code-input', 'friend-email-input'], renderFriends);
+      try { await loadChallenges(); } catch (e) { console.warn('social refresh: loadChallenges failed:', e.message || e); }
+      renderChallenges();
+    } else {
+      // Stats challenge card: the same sequence renderStats runs on tab-open.
+      // loadChallengeFriends / loadChallengeGridData / fetchChallengeComments are
+      // each already failure-silent internally.
+      await loadChallengeFriends();
+      try { await loadChallenges(); } catch (e) { console.warn('social refresh: loadChallenges failed:', e.message || e); }
+      const sel = challengeState.selected;
+      const ch = (sel && sel !== 'overview') ? challengesCache.mine.find(c => c.id === sel) : null;
+      if (ch) { await loadChallengeGridData(ch); await fetchChallengeComments(ch.id); }
+      // refreshChallenge rebuilds the whole card incl. the comment box, so guard it.
+      repaintPreservingInputs(['cg-comment-input'], refreshChallenge);
+    }
+  } catch (e) {
+    console.warn('social refresh failed:', e.message || e);
+  } finally {
+    _socialRefreshing = false;
+  }
+}
+
 loadState();
 applyTheme();
 renderLog();
@@ -6896,6 +6968,12 @@ loadSyncQueue();
 setInterval(() => flushSyncQueue(), 30000);
 window.addEventListener('online', () => flushSyncQueue());
 document.addEventListener('visibilitychange', () => { if (!document.hidden) flushSyncQueue(); });
+
+// Same refocus signals as the sync queue above, applied to the open social
+// surface so a friend request / comment / training dot posted on another device
+// appears on refocus without navigating (finding H0.9). No polling timer.
+window.addEventListener('online', () => refreshOpenSocialSurface());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOpenSocialSurface(); });
 
 // Boot Supabase auth last so the app is rendered behind the sign-in overlay
 if (initSupabase()) {
