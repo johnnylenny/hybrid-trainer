@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.48.0 — run Save-as-Template parity (H0.5/F7): the run branch of saveCurrentAsTemplate now iterates RUN_TYPES[runType].fields and deep-copies intervalSets, matching saveTemplateDraft and the conditioning branch, so a tempo/intervals/long/race run saved as a template keeps its per-type fields (was hardcoded runType/distance/pace, which dropped tempoPace/warmup/etc). No SCHEMA_VERSION change (stays 16)
+  HYBRID TRAINER v0.49.0 — delete account, completely (H0.6/F2): handleDeleteAccount now wipes the full social footprint (profiles, friendships, training_days, challenge memberships, comments, likes) plus owned challenges (FK cascade), not just sessions/templates/settings. The Settings card, confirm prompt, and success toast are now honest that the auth login record survives until the admin removes it in the dashboard. Needs the new profiles_delete RLS policy (account-delete-profiles-policy.sql). No SCHEMA_VERSION change (stays 16)
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.49.0:
+    - Delete account, completely (path-redesign H0.6, audit F2). Deleting your
+      account used to wipe only sessions, templates, and settings, leaving your
+      whole social footprint behind, so a deleted person still showed up in a
+      friend's grid.
+      - handleDeleteAccount now also deletes profiles, friendships,
+        training_days, challenge memberships, comments, and likes, and the
+        challenges you own (their members/comments/likes cascade with them).
+        The client only deletes its own rows; DB FK cascades clean up the rest.
+      - New profiles_delete RLS policy (account-delete-profiles-policy.sql):
+        profiles was the one social table with no delete policy, so the client
+        could not remove its own profile row. No SECURITY DEFINER RPC needed.
+      - Honest copy: the Settings card, the confirm prompt, and the success
+        toast now all say the sign-in login record itself survives until the
+        admin removes it in the dashboard (the browser key can't delete it).
+    - No SCHEMA_VERSION change (standalone tables, no data-shape change), stays 16.
+      APP_VERSION v0.49.0.
 
   What's new in v0.48.0:
     - Run Save-as-Template parity (path-redesign H0.5, audit F7). Saving a run
@@ -1108,7 +1126,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.48.0</small>
+      <small>v0.49.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1423,12 +1441,12 @@
   </div>
 
   <div class="card danger-zone" id="delete-account-card" style="display:none; margin-top:12px;">
-    <p class="muted" style="margin-bottom:12px">Permanently deletes your cloud account and ALL cloud-synced data (sessions, templates, settings). Local data on this device is NOT touched. There is no undo.</p>
+    <p class="muted" style="margin-bottom:12px">Permanently deletes ALL your cloud data: sessions, templates, settings, your profile, friends, and challenges you own or joined. Local data on this device is NOT touched. Your sign-in login stays registered until the admin removes it from the server. There is no undo.</p>
     <button class="btn-danger-strong" onclick="handleDeleteAccount()">Delete account</button>
   </div>
 
   <div class="card compact">
-    <small>v0.48.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.49.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1466,7 +1484,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.48.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.49.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -1854,37 +1872,52 @@ async function handleSignOut() {
 async function handleDeleteAccount() {
   if (!currentUser) return;
   const confirm1 = await modalPrompt(
-    'This permanently deletes your account, all your cloud-synced sessions, templates, and settings.\n\n' +
-    'Local data in this browser is NOT touched.\n\n' +
+    'This permanently deletes all your cloud data: sessions, templates, settings, your profile, friends, and any challenges you own or joined.\n\n' +
+    'Local data in this browser is NOT touched. Your sign-in login stays registered until the admin removes it.\n\n' +
     'Type DELETE (all caps) to confirm:'
   );
   if (confirm1 !== 'DELETE') { showToast('Cancelled.', 'info'); return; }
-  if (!await modalConfirm('Last chance. Really delete your account?')) return;
+  if (!await modalConfirm('Last chance. Delete all your cloud data now?')) return;
 
   try {
-    // Delete user data from tables. RLS policies ensure we can only delete our own rows.
+    // Delete every row this user owns, across all tables. RLS ensures we can
+    // only ever touch our own rows. Order is cascade-safe: leaf rows first,
+    // then owned challenges (whose child FKs are ON DELETE CASCADE, so their
+    // members/comments/likes go with them, including other users'), then the
+    // identity rows. Deleting my own comment also cascade-deletes others' likes
+    // on it, so the client only ever deletes its OWN rows and the DB cascades
+    // clean up the rest. (profiles needs the profiles_delete RLS policy from
+    // account-delete-profiles-policy.sql, or its delete silently removes 0 rows.)
     const userId = currentUser.id;
     const errors = [];
+    const del = async (label, query) => {
+      const { error } = await query;
+      if (error) errors.push(label + ': ' + error.message);
+    };
 
-    const { error: e1 } = await sb.from('sessions').delete().eq('user_id', userId);
-    if (e1) errors.push('sessions: ' + e1.message);
-    const { error: e2 } = await sb.from('templates').delete().eq('user_id', userId);
-    if (e2) errors.push('templates: ' + e2.message);
-    const { error: e3 } = await sb.from('user_settings').delete().eq('user_id', userId);
-    if (e3) errors.push('settings: ' + e3.message);
+    await del('sessions', sb.from('sessions').delete().eq('user_id', userId));
+    await del('templates', sb.from('templates').delete().eq('user_id', userId));
+    await del('settings', sb.from('user_settings').delete().eq('user_id', userId));
+    await del('comment likes', sb.from('challenge_comment_likes').delete().eq('user_id', userId));
+    await del('comments', sb.from('challenge_comments').delete().eq('author_id', userId));
+    await del('challenge memberships', sb.from('challenge_members').delete().eq('user_id', userId));
+    await del('owned challenges', sb.from('challenges').delete().eq('owner_id', userId));
+    await del('training days', sb.from('training_days').delete().eq('user_id', userId));
+    await del('friend links (sent)', sb.from('friendships').delete().eq('requester_id', userId));
+    await del('friend links (received)', sb.from('friendships').delete().eq('addressee_id', userId));
+    await del('profile', sb.from('profiles').delete().eq('user_id', userId));
 
     if (errors.length > 0) {
-      showToast('Some data could not be deleted:\n' + errors.join('\n') + '\n\nThe account itself was not deleted. Try again or contact support.', 'error');
+      showToast('Some data could not be deleted:\n' + errors.join('\n') + '\n\nYou were not signed out. Try again.', 'error');
       return;
     }
 
-    // Delete the auth user itself via the user-callable RPC.
-    // Note: Supabase does not allow the anon client to call admin.deleteUser directly.
-    // The recommended pattern is a database function the user can invoke. For now we
-    // sign the user out after wiping their data; the auth record persists until manually
-    // removed in the Supabase dashboard. (We will add the RPC in a later patch.)
+    // The auth login record (auth.users) can't be removed from the browser: the
+    // publishable key can't call admin.deleteUser, and we deliberately don't add
+    // a superuser RPC for it. We wipe the data and sign out; the login row stays
+    // until the project admin deletes it in the dashboard (Authentication -> Users).
     await sb.auth.signOut();
-    showToast('Your data has been deleted and you have been signed out.\n\nNote: the auth login record itself can only be removed by the project admin. Tell Johnny if this is your account.', 'success');
+    showToast('Your cloud data has been deleted and you are signed out.\n\nYour sign-in login still exists on the server until the admin removes it. Tell Johnny if this is your account.', 'success');
   } catch (e) {
     showToast('Unexpected error: ' + e.message, 'error');
   }
