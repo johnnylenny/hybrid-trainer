@@ -1,8 +1,37 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.54.0: automated daily Garmin sync + a shared "Garmin" badge in History. A scheduled GitHub Actions workflow (.github/workflows/garmin-sync.yml, daily 09:00 UTC + manual dispatch) runs sync/garmin_sync.py: it loads pre-seeded cached Garmin tokens (NEVER a credential login from CI — Garmin rate-limits those into multi-day lockouts; expired tokens = fail fast with re-seed instructions, see sync/SETUP.md), fetches the last 3 days of activities, maps them to session rows with straight Python ports of the TCX importer's helpers (classifyRunType/secondsToClock/metersToDisplay/paceFromMetersSeconds — parity-tested against the JS), and inserts them into Supabase signed in as the app user so RLS applies (anon key + HT_EMAIL/HT_PASSWORD secrets; no service key). Dedupe: import_source "garmin:<UTC ISO>" in the exact TCX <Id> format, compared at seconds precision, so TCX-imported and auto-synced copies of one activity collapse; re-runs insert zero. strength_training is skipped (lifts are logged in-app). distance_unit/default_phase come from cloud user_settings; easyHrCeiling is localStorage-only by design so tempo detection in CI reads the optional EASY_HR_CEILING repo variable. Webapp change is just the badge: History cards show a "Garmin" tag when importSource starts with "garmin:" (TCX imports get it too). training_days for synced rows self-heal via v0.53.0 reconcileTrainingDays on next app open. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
-  Previous: v0.53.0 made the training-day signal as durable as a session write (self-heal). The training_days table (a per-day "trained this modality" dot that the friends grid and challenge grid read) was written only by a per-save call (syncTrainingDayFor) plus a one-time backfill. A save whose day-write was lost before it durably queued (tab frozen the instant after Save, so the un-awaited write dies before the catch/enqueue runs), or dropped when a sign-out wipes the retry queue, left the session row in the cloud but no day row, with the badge still reading "Synced". Sessions already self-heal on sign-in (onSignedInCore re-pushes missing local sessions); training_days had no equivalent and the backfill never re-runs (TD_BACKFILL_KEY guard). New reconcileTrainingDays() reads the cloud's day rows and queues a durable trySync upsert for every local (date,type) the cloud lacks; it runs on sign-in (inside cloudPullAll, after the one-time backfill) and on the SAME online + visibilitychange refocus signals the retry queue uses. Upsert-only (never deletes), fail-silent, re-entrancy-guarded. Restored Johnny's lost 2026-07-03 lifts day row. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.55.0: Open Graph + Twitter card meta tags plus a meta description, so pasting the live GitHub Pages link into iMessage/WhatsApp/Discord/Slack renders a real preview card (image, title, description) instead of a bare URL. Added to <head>: meta description, og:title/og:description/og:image(+width/height/alt)/og:url/og:type, and twitter:card=summary_large_image with twitter:title/description/image. New assets/og-image.png (1200x630): the confirmed HT-logo.png mark as a rounded icon tile on the canonical dark bg (#0a0a0b), with the "Hybrid Trainer" wordmark and the approved short tagline. og:image/twitter:image use the full absolute URL (https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png) since link-preview scrapers won't resolve a relative path. Copy follows BRAND.md voice (plain, no hype). HT-logo.png and favicon/ themselves stay untracked and untouched at the repo root — wiring those in as the app's actual favicon/icon set is still its own separate release (IDEAS.md). Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  Previous: v0.54.0 added automated daily Garmin sync — a scheduled GitHub Actions workflow (garmin-sync.yml, daily 09:00 UTC + manual dispatch) running sync/garmin_sync.py with cached-token login only (no CI credential login), Python ports of the TCX import helpers, and import_source-based dedupe against TCX imports — plus a shared "Garmin" History badge. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.55.0:
+    - Open Graph + Twitter card meta tags, so the GitHub Pages link renders a
+      real preview card (image, title, description) in iMessage/WhatsApp/
+      Discord/Slack/etc. instead of a bare URL. Added to <head>, right after
+      <title>: a meta description; og:type/og:url/og:title/og:description/
+      og:image/og:image:width/og:image:height/og:image:alt; and
+      twitter:card=summary_large_image with twitter:title/twitter:description/
+      twitter:image. Title/description copy follows BRAND.md voice (plain,
+      no hype, no exclamation points) and doubles as the one-liner pitch for
+      the "share the app with friends" backlog item (IDEAS.md).
+    - New assets/og-image.png (1200x630, the standard OG size). Composed (not
+      hand-drawn) from the existing confirmed branding: the 512x512
+      HT-logo.png mark, scaled down and rounded into an icon tile, placed on
+      the canonical dark background (#0a0a0b) with the "Hybrid Trainer"
+      wordmark and the BRAND.md-approved short tagline ("Lift. Run.
+      Condition. Track all three.") to its right. No new accent colors, no
+      gradients, no drop shadow added — matches BRAND.md's icon rules.
+    - og:image / twitter:image reference the full absolute URL
+      (https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png).
+      Link-preview scrapers (iMessage, Discord, Slack, etc.) fetch this
+      directly and don't run relative to the page, so a relative path
+      silently fails to render an image.
+    - HT-logo.png and favicon/ themselves are UNCHANGED — still untracked at
+      the repo root, per the existing "wire in the favicon" backlog item
+      (IDEAS.md), which stays its own separate release. This release only
+      adds the one derived og-image.png.
+    - No SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+      APP_VERSION v0.55.0.
 
   What's new in v0.54.0:
     - Automated daily Garmin sync (activities only, no health metrics). New
@@ -624,6 +653,21 @@
 <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Hybrid Trainer</title>
+
+<!-- Search + social preview (link-preview cards in iMessage/WhatsApp/Discord/Slack, etc.) -->
+<meta name="description" content="A workout tracker for hybrid athletes who lift, run, and condition. Stop guessing how your lifting day affects your run pace tomorrow.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://johnnylenny.github.io/hybrid-trainer/">
+<meta property="og:title" content="Hybrid Trainer">
+<meta property="og:description" content="A workout tracker for hybrid athletes who lift, run, and condition. Stop guessing how your lifting day affects your run pace tomorrow.">
+<meta property="og:image" content="https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Hybrid Trainer logo mark on a dark background">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Hybrid Trainer">
+<meta name="twitter:description" content="A workout tracker for hybrid athletes who lift, run, and condition. Stop guessing how your lifting day affects your run pace tomorrow.">
+<meta name="twitter:image" content="https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png">
 
 <!-- Browser-tab favicon (the little logo next to the page title in the tab) -->
 <link rel="icon" type="image/png" href="assets/icon-192.png">
@@ -1251,7 +1295,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.54.0</small>
+      <small>v0.55.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1571,7 +1615,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.54.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.55.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1609,7 +1653,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.54.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.55.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
