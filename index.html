@@ -1,8 +1,40 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.55.1: same-session refinement of the v0.55.0 Open Graph release, caught by actually pasting the live URL into a public OG-preview tool (opengraph.xyz) as the success check. Two fixes: added og:site_name ("Hybrid Trainer") — Discord shows this above the title and the card reads as anonymous without it; and swapped the meta/og/twitter description from a composed two-sentence line to BRAND.md's exact pre-approved one-liner ("A workout tracker for hybrid athletes who lift, run, and condition — built to model the systemic fatigue no other app captures."), which is both more precisely brand-sanctioned and a few characters shorter (127 vs 134), reducing truncation risk in the ~125-character window most social previews show on mobile. <title> and assets/og-image.png are UNCHANGED on purpose: the same preview tool also suggested padding <title> to 50-60 characters for SEO and adding a call-to-action overlay to the image, but both cut against BRAND.md's plain, no-hype voice, so neither was adopted. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
-  Previous: v0.55.0 added Open Graph + Twitter card meta tags plus a meta description, so pasting the GitHub Pages link into iMessage/WhatsApp/Discord/Slack renders a real preview card (image, title, description) instead of a bare URL, plus a new assets/og-image.png (1200x630) composed from the confirmed HT-logo.png mark as a rounded icon tile on the canonical dark background. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.56.0: wired the confirmed favicon/logo set into <head>. The browser-tab favicon now uses favicon.svg + favicon-96x96.png + favicon.ico (moved from the untracked favicon/ folder at the repo root into assets/, matching the "icons live in assets/" convention), replacing the old single assets/icon-192.png fallback. apple-touch-icon stays on the existing assets/icon-180.png — visually confirmed the same HT mark at the right 180x180 size already, so it needed no change. favicon/site.webmanifest was deliberately NOT moved or wired in: it's RealFaviconGenerator's generic template (name "MyWebSite"/"MySite", wrong theme/background colors, two icon paths that don't exist in this repo) and would have shipped a second, wrong PWA identity next to the real manifest.json (correct name "Hybrid Trainer", BRAND.md's colors), which is unchanged. HT-logo.png (the 512x512 source mark) stays untracked at the repo root on purpose — nothing in <head> loads it directly, and this release was scoped to the favicon/ set only. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  Previous: v0.55.1 was a same-session refinement of the v0.55.0 Open Graph release: added og:site_name and tightened the meta/og/twitter description to BRAND.md's exact pre-approved one-liner, after pasting the live URL into a public OG-preview tool surfaced both gaps. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.56.0:
+    - Wired the confirmed favicon/logo set into <head>: <link rel="icon">
+      now points at favicon-96x96.png (PNG fallback, 96x96) and favicon.svg
+      (modern scalable browsers), plus <link rel="shortcut icon"> for
+      favicon.ico (legacy browsers/Windows) — the same order
+      RealFaviconGenerator's own standard snippet uses. Replaces the old
+      single assets/icon-192.png favicon link (a PWA icon repurposed as a
+      stand-in favicon, not a real favicon set).
+    - apple-touch-icon (the icon iOS uses for "Add to Home Screen") left
+      pointing at the existing assets/icon-180.png. Visually compared
+      side-by-side with the new favicon.svg/favicon-96x96.png: same HT mark,
+      same colors, already the correct 180x180 size — no change needed.
+    - Moved favicon.ico / favicon.svg / favicon-96x96.png out of the
+      untracked favicon/ folder at the repo root into assets/ (repo
+      convention: icons live in assets/) and committed them, per Johnny's
+      2026-07-03 confirmation that this HT mark is the intended branding.
+    - favicon/site.webmanifest deliberately NOT moved or referenced.
+      RealFaviconGenerator's generated template has the wrong app name
+      ("MyWebSite"/"MySite"), the wrong theme/background colors, and points
+      at two /web-app-manifest-*.png files that don't exist anywhere in this
+      repo. Linking it as a second <link rel="manifest"> would have
+      conflicted with the real, already-correct manifest.json (name
+      "Hybrid Trainer", BRAND.md's theme colors, the actual icon-192/
+      icon-512 files) — left untouched here.
+    - HT-logo.png, the 512x512 source mark the whole set (favicon set,
+      assets/icon-*, assets/og-image.png) was generated from, stays
+      untracked at the repo root on purpose: nothing in <head> loads it
+      directly, and today's task was scoped to wiring the favicon/ set only.
+    - No SCHEMA_VERSION change (stays 16), no migration, no RLS change. Pure
+      static assets + <head> links, no client logic touched. APP_VERSION
+      v0.56.0.
 
   What's new in v0.55.1:
     - Added og:site_name ("Hybrid Trainer"). Discord displays this above the
@@ -690,7 +722,9 @@
 <meta name="twitter:image" content="https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png">
 
 <!-- Browser-tab favicon (the little logo next to the page title in the tab) -->
-<link rel="icon" type="image/png" href="assets/icon-192.png">
+<link rel="icon" type="image/png" href="assets/favicon-96x96.png" sizes="96x96">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="shortcut icon" href="assets/favicon.ico">
 
 <!-- PWA manifest (Android, Chrome, modern browsers) -->
 <link rel="manifest" href="manifest.json">
@@ -1315,7 +1349,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.55.1</small>
+      <small>v0.56.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1635,7 +1669,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.55.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.56.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1673,7 +1707,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.55.1'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.56.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
