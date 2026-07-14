@@ -1,8 +1,27 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.55.0: Open Graph + Twitter card meta tags plus a meta description, so pasting the live GitHub Pages link into iMessage/WhatsApp/Discord/Slack renders a real preview card (image, title, description) instead of a bare URL. Added to <head>: meta description, og:title/og:description/og:image(+width/height/alt)/og:url/og:type, and twitter:card=summary_large_image with twitter:title/description/image. New assets/og-image.png (1200x630): the confirmed HT-logo.png mark as a rounded icon tile on the canonical dark bg (#0a0a0b), with the "Hybrid Trainer" wordmark and the approved short tagline. og:image/twitter:image use the full absolute URL (https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png) since link-preview scrapers won't resolve a relative path. Copy follows BRAND.md voice (plain, no hype). HT-logo.png and favicon/ themselves stay untracked and untouched at the repo root — wiring those in as the app's actual favicon/icon set is still its own separate release (IDEAS.md). Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
-  Previous: v0.54.0 added automated daily Garmin sync — a scheduled GitHub Actions workflow (garmin-sync.yml, daily 09:00 UTC + manual dispatch) running sync/garmin_sync.py with cached-token login only (no CI credential login), Python ports of the TCX import helpers, and import_source-based dedupe against TCX imports — plus a shared "Garmin" History badge. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.55.1: same-session refinement of the v0.55.0 Open Graph release, caught by actually pasting the live URL into a public OG-preview tool (opengraph.xyz) as the success check. Two fixes: added og:site_name ("Hybrid Trainer") — Discord shows this above the title and the card reads as anonymous without it; and swapped the meta/og/twitter description from a composed two-sentence line to BRAND.md's exact pre-approved one-liner ("A workout tracker for hybrid athletes who lift, run, and condition — built to model the systemic fatigue no other app captures."), which is both more precisely brand-sanctioned and a few characters shorter (127 vs 134), reducing truncation risk in the ~125-character window most social previews show on mobile. <title> and assets/og-image.png are UNCHANGED on purpose: the same preview tool also suggested padding <title> to 50-60 characters for SEO and adding a call-to-action overlay to the image, but both cut against BRAND.md's plain, no-hype voice, so neither was adopted. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  Previous: v0.55.0 added Open Graph + Twitter card meta tags plus a meta description, so pasting the GitHub Pages link into iMessage/WhatsApp/Discord/Slack renders a real preview card (image, title, description) instead of a bare URL, plus a new assets/og-image.png (1200x630) composed from the confirmed HT-logo.png mark as a rounded icon tile on the canonical dark background. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.55.1:
+    - Added og:site_name ("Hybrid Trainer"). Discord displays this above the
+      title in its link-preview card; without it the card reads as
+      anonymous. Cost: one meta tag, no visual/behavior change elsewhere.
+    - Tightened the meta/og/twitter description to BRAND.md's exact
+      pre-approved one-liner (127 characters, was a composed 134-character
+      two-sentence line) — both closer to BRAND.md wording and a bit under
+      most platforms' ~125-character preview window, so it's less likely to
+      truncate mid-sentence on mobile.
+    - Deliberately NOT changed: <title> (a preview tool suggested padding it
+      to 50-60 characters for SEO; BRAND.md's naming rules just say use
+      "Hybrid Trainer" in page titles, so padding it would be SEO stuffing
+      with no brand basis) and assets/og-image.png (the same tool suggested
+      an image call-to-action overlay; BRAND.md's voice rules explicitly
+      rule out marketing-style copy). Both logged as considered-and-skipped,
+      not overlooked.
+    - No SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+      APP_VERSION v0.55.1.
 
   What's new in v0.55.0:
     - Open Graph + Twitter card meta tags, so the GitHub Pages link renders a
@@ -655,18 +674,19 @@
 <title>Hybrid Trainer</title>
 
 <!-- Search + social preview (link-preview cards in iMessage/WhatsApp/Discord/Slack, etc.) -->
-<meta name="description" content="A workout tracker for hybrid athletes who lift, run, and condition. Stop guessing how your lifting day affects your run pace tomorrow.">
+<meta name="description" content="A workout tracker for hybrid athletes who lift, run, and condition — built to model the systemic fatigue no other app captures.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://johnnylenny.github.io/hybrid-trainer/">
+<meta property="og:site_name" content="Hybrid Trainer">
 <meta property="og:title" content="Hybrid Trainer">
-<meta property="og:description" content="A workout tracker for hybrid athletes who lift, run, and condition. Stop guessing how your lifting day affects your run pace tomorrow.">
+<meta property="og:description" content="A workout tracker for hybrid athletes who lift, run, and condition — built to model the systemic fatigue no other app captures.">
 <meta property="og:image" content="https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Hybrid Trainer logo mark on a dark background">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Hybrid Trainer">
-<meta name="twitter:description" content="A workout tracker for hybrid athletes who lift, run, and condition. Stop guessing how your lifting day affects your run pace tomorrow.">
+<meta name="twitter:description" content="A workout tracker for hybrid athletes who lift, run, and condition — built to model the systemic fatigue no other app captures.">
 <meta name="twitter:image" content="https://johnnylenny.github.io/hybrid-trainer/assets/og-image.png">
 
 <!-- Browser-tab favicon (the little logo next to the page title in the tab) -->
@@ -1295,7 +1315,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.55.0</small>
+      <small>v0.55.1</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1615,7 +1635,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.55.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.55.1 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1653,7 +1673,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.55.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.55.1'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
