@@ -1,0 +1,67 @@
+# Daily Garmin -> Hybrid Trainer cloud sync. Setup: sync/SETUP.md.
+#
+# Auth design (do not change casually):
+#   - Garmin: pre-seeded cached tokens ONLY (GARMIN_TOKENS secret). The sync
+#     script has no credential-login code path; if tokens are missing or
+#     expired it fails fast with re-seed instructions. Garmin credentials
+#     must never exist as CI secrets.
+#   - Supabase: signs in as the app user (HT_EMAIL/HT_PASSWORD) with the
+#     public anon key, so RLS applies normally. Never the service role key.
+name: Garmin sync
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # daily 09:00 UTC, after overnight device sync
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garmin-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore Garmin tokens from secret
+        env:
+          GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
+        run: |
+          if [ -z "$GARMIN_TOKENS" ]; then
+            echo "::error::GARMIN_TOKENS secret is missing. Seed tokens locally: run 'python3 sync/seed_tokens.py' on your machine, then 'COPYFILE_DISABLE=1 tar czf - -C \"\$HOME\" .garminconnect | base64 | pbcopy' and paste into the GARMIN_TOKENS repo secret. Full steps: sync/SETUP.md. No Garmin login was attempted."
+            exit 1
+          fi
+          echo "$GARMIN_TOKENS" | base64 -d | tar xzf - -C "$HOME"
+          chmod -R go-rwx "$HOME/.garminconnect"
+
+      - name: Install dependencies
+        run: pip install -r sync/requirements.txt
+
+      - name: Run sync
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          HT_EMAIL: ${{ secrets.HT_EMAIL }}
+          HT_PASSWORD: ${{ secrets.HT_PASSWORD }}
+          EASY_HR_CEILING: ${{ vars.EASY_HR_CEILING }}
+        run: python sync/garmin_sync.py
+
+      # Redacted debug log (dates, activity types, insert/skip decisions —
+      # no activity names, no HR data, no secrets). Only kept on failure.
+      - name: Upload debug log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: garmin-sync-debug-log
+          path: sync_log.txt
+          if-no-files-found: ignore
+          retention-days: 7

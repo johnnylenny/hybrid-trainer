@@ -84,7 +84,7 @@ A session represents one workout. There are three types: `lifts`, `run`, `condit
 | `runData` | object | Used when `type === "run"`. Empty otherwise. |
 | `condData` | object | Used when `type === "conditioning"`. Empty otherwise. |
 | `notes` | string | Free-text notes about the whole session. |
-| `importSource` | string | Stable id of an external source this session was imported from, used to skip duplicates on re-import. Empty for hand-logged sessions. Added in v15. Format `<source>:<id>` — e.g. Hevy CSV import uses `hevy:<start_time>\|<title>`; Garmin .TCX import (v0.39.0) uses `garmin:<startIso>`. |
+| `importSource` | string | Stable id of an external source this session was imported from, used to skip duplicates on re-import. Empty for hand-logged sessions. Added in v15. Format `<source>:<id>` — e.g. Hevy CSV import uses `hevy:<start_time>\|<title>`; Garmin .TCX import (v0.39.0) uses `garmin:<startIso>`. The automated daily Garmin sync (v0.54.0, `sync/garmin_sync.py`) writes the SAME `garmin:<startIso>` format (UTC, TCX `<Id>` style) and its skip-check compares at seconds precision, so a TCX-imported and an auto-synced copy of one activity dedupe against each other. History shows a "Garmin" badge on any `garmin:`-prefixed session. |
 
 ## Exercise object (lifts only)
 

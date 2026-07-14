@@ -1,7 +1,36 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.53.0: the training-day signal is now as durable as a session write (self-heal). The training_days table (a per-day "trained this modality" dot that the friends grid and challenge grid read) was written only by a per-save call (syncTrainingDayFor) plus a one-time backfill. A save whose day-write was lost before it durably queued (tab frozen the instant after Save, so the un-awaited write dies before the catch/enqueue runs), or dropped when a sign-out wipes the retry queue, left the session row in the cloud but no day row, with the badge still reading "Synced". Sessions already self-heal on sign-in (onSignedInCore re-pushes missing local sessions); training_days had no equivalent and the backfill never re-runs (TD_BACKFILL_KEY guard). New reconcileTrainingDays() reads the cloud's day rows and queues a durable trySync upsert for every local (date,type) the cloud lacks; it runs on sign-in (inside cloudPullAll, after the one-time backfill) and on the SAME online + visibilitychange refocus signals the retry queue uses. Upsert-only (never deletes), fail-silent, re-entrancy-guarded. Restored Johnny's lost 2026-07-03 lifts day row. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.54.0: automated daily Garmin sync + a shared "Garmin" badge in History. A scheduled GitHub Actions workflow (.github/workflows/garmin-sync.yml, daily 09:00 UTC + manual dispatch) runs sync/garmin_sync.py: it loads pre-seeded cached Garmin tokens (NEVER a credential login from CI — Garmin rate-limits those into multi-day lockouts; expired tokens = fail fast with re-seed instructions, see sync/SETUP.md), fetches the last 3 days of activities, maps them to session rows with straight Python ports of the TCX importer's helpers (classifyRunType/secondsToClock/metersToDisplay/paceFromMetersSeconds — parity-tested against the JS), and inserts them into Supabase signed in as the app user so RLS applies (anon key + HT_EMAIL/HT_PASSWORD secrets; no service key). Dedupe: import_source "garmin:<UTC ISO>" in the exact TCX <Id> format, compared at seconds precision, so TCX-imported and auto-synced copies of one activity collapse; re-runs insert zero. strength_training is skipped (lifts are logged in-app). distance_unit/default_phase come from cloud user_settings; easyHrCeiling is localStorage-only by design so tempo detection in CI reads the optional EASY_HR_CEILING repo variable. Webapp change is just the badge: History cards show a "Garmin" tag when importSource starts with "garmin:" (TCX imports get it too). training_days for synced rows self-heal via v0.53.0 reconcileTrainingDays on next app open. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  Previous: v0.53.0 made the training-day signal as durable as a session write (self-heal). The training_days table (a per-day "trained this modality" dot that the friends grid and challenge grid read) was written only by a per-save call (syncTrainingDayFor) plus a one-time backfill. A save whose day-write was lost before it durably queued (tab frozen the instant after Save, so the un-awaited write dies before the catch/enqueue runs), or dropped when a sign-out wipes the retry queue, left the session row in the cloud but no day row, with the badge still reading "Synced". Sessions already self-heal on sign-in (onSignedInCore re-pushes missing local sessions); training_days had no equivalent and the backfill never re-runs (TD_BACKFILL_KEY guard). New reconcileTrainingDays() reads the cloud's day rows and queues a durable trySync upsert for every local (date,type) the cloud lacks; it runs on sign-in (inside cloudPullAll, after the one-time backfill) and on the SAME online + visibilitychange refocus signals the retry queue uses. Upsert-only (never deletes), fail-silent, re-entrancy-guarded. Restored Johnny's lost 2026-07-03 lifts day row. Client-only: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.54.0:
+    - Automated daily Garmin sync (activities only, no health metrics). New
+      sync/ folder: garmin_sync.py (CI script: fetch last 3 days -> map ->
+      dedupe-check -> insert into the sessions table), seed_tokens.py (the
+      ONE local credential login that creates the cached tokens CI reuses),
+      SETUP.md (secrets, base64 token packing, re-seed steps), plus
+      .github/workflows/garmin-sync.yml (cron 09:00 UTC + workflow_dispatch).
+    - CI never logs into Garmin with credentials. Tokens only; missing or
+      expired tokens fail the run immediately with re-seed instructions and
+      zero login attempts (Garmin 429-lockouts are brutal since 2026-03).
+    - Mapping parity: the Python ports of classifyRunType, secondsToClock,
+      metersToDisplay and paceFromMetersSeconds were fixture-tested against
+      the live JS extracted from this file — identical output, including the
+      overall-HR tempo fallback and the zero-distance-lap filter.
+    - Dedupe: rows carry import_source "garmin:<UTC ISO>" in the exact format
+      the TCX importer writes; the skip-check normalizes to seconds precision
+      so a TCX-imported run and the auto-synced same run never duplicate.
+      Second run in a row inserts nothing. strength_training is skipped.
+    - Supabase side: signs in as the app user (RLS intact, no service key),
+      reads distance_unit/default_phase from user_settings so rows match the
+      app's units; EASY_HR_CEILING repo variable feeds tempo detection
+      (easyHrCeiling is localStorage-only on purpose, CI can't read it).
+    - Webapp: History cards now show a "Garmin" badge (tag) when a session's
+      importSource starts with "garmin:" — shared by TCX imports and the
+      auto-sync. That's the entire client change.
+    - No SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+      APP_VERSION v0.54.0.
 
   What's new in v0.53.0:
     - The training-day signal (training_days: the per-day, per-modality dot the
@@ -896,6 +925,7 @@
     text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
     margin-left: 4px; vertical-align: middle;
   }
+  .tag.garmin { color: var(--info); }
   .header-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   pre { white-space: pre-wrap; font-size: 0.9rem; color: var(--text-muted); font-family: inherit; line-height: 1.6; }
   .autocomplete { position: relative; flex: 1; }
@@ -1221,7 +1251,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.53.0</small>
+      <small>v0.54.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1541,7 +1571,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.53.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.54.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1579,7 +1609,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.53.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.54.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4541,6 +4571,10 @@ function renderHistory() {
       ? `<span class="tag">${escapeHtml(RUN_TYPES[s.runData.runType].name)}</span>` : '';
     const condTypeTag = (s.type === 'conditioning' && s.condData && s.condData.condType && COND_TYPES[s.condData.condType])
       ? `<span class="tag">${escapeHtml(COND_TYPES[s.condData.condType].name)}</span>` : '';
+    // Shared badge for anything Garmin-sourced: manual TCX imports and the
+    // automated daily sync both write importSource "garmin:<start>".
+    const garminTag = (s.importSource || '').indexOf('garmin:') === 0
+      ? '<span class="tag garmin">Garmin</span>' : '';
     return `
       <div class="session-card ${s.type}" onclick="editHistorySession(${realIdx})">
         <div class="header-row" style="margin-bottom:4px">
@@ -4549,6 +4583,7 @@ function renderHistory() {
             ${runTypeTag}
             ${condTypeTag}
             ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
+            ${garminTag}
           </h3>
           <button class="btn-danger" onclick="event.stopPropagation(); deleteHistory(${realIdx})">Delete</button>
         </div>

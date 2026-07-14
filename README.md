@@ -64,6 +64,7 @@ Built as a learning project. Eventually intended to be a hub that pulls runs fro
 - Export and import your data as JSON (with schema versioning), from Settings or the History tab
 - Import your Hevy history from a CSV export (Settings → Data) — each Hevy workout becomes a lifts session, supersets split into separate exercises, drop sets split into separate sets, and re-importing the same file skips duplicates
 - Import a run or ride from a Garmin .TCX file (Settings → Data → Import workouts → From Garmin) — it reads distance, time, pace and heart rate, converts to your units, and guesses the run type (easy, tempo, intervals, long), then opens it on the Log tab to review before saving
+- Automated daily Garmin sync (optional, for the cloud-synced account): a scheduled GitHub Actions workflow pulls the last few days of Garmin activities and inserts them as sessions — runs auto-typed the same way as the .TCX import, cycling and rowing as conditioning, strength skipped (you log lifts in the app), duplicates skipped. Sessions show a "Garmin" badge in History. Setup in [sync/SETUP.md](sync/SETUP.md)
 - Send feedback (bug reports or feature requests) from inside the app (Settings → Feedback), signed in or not
 - Import a single workout (or a batch) by pasting JSON (Settings → Data) — with a "Copy AI prompt" button so an AI can turn handwritten notes, a photo, or another app's export into the right format; one workout opens on the Log tab to review before saving
 - Delete your cloud account from inside the app
@@ -101,7 +102,7 @@ In either mode, **export your data regularly** as a backup. Settings → Export 
 ## Roadmap
 
 **Next up:**
-- More cardio import formats, so you stop hand-entering pace/distance/HR. Garmin .TCX import already ships (v0.39, with heart-rate-based run-type detection added in v0.40); GPX is the next file format, then .FIT (binary), then a Strava connection. Lifting import from Hevy shipped in v0.25.
+- More cardio import formats, so you stop hand-entering pace/distance/HR. Garmin .TCX import ships since v0.39 (heart-rate-based run-type detection since v0.40), and v0.54 added a fully automated daily Garmin pull via GitHub Actions — file imports are now the manual fallback. GPX is the next file format, then .FIT (binary), then a Strava connection. Lifting import from Hevy shipped in v0.25.
 
 **The reason this exists:**
 - Combined lifting + cardio fatigue score (the differentiator no other app does for hybrid athletes)

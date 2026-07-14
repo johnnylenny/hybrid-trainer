@@ -31,3 +31,6 @@ IDEAS.md
 _local/
 outputs/
 _progress.md
+
+# Garmin sync local debug log (dates + activity types; keep out of the public repo)
+sync_log.txt

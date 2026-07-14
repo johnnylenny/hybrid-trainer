@@ -1,0 +1,6 @@
+# Deps for the Garmin -> Hybrid Trainer sync (sync/garmin_sync.py and
+# sync/seed_tokens.py). garminconnect is the unofficial Garmin Connect
+# client (it can break when Garmin changes things — the workflow fails
+# loudly if so); supabase is the official Python client.
+garminconnect>=0.2.25
+supabase>=2.4
