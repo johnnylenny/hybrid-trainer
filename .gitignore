@@ -18,6 +18,10 @@ Desktop.ini
 # Logs
 *.log
 
+# Python bytecode cache (sync/ scripts)
+__pycache__/
+*.pyc
+
 # Personal backups (don't commit your workout data to a public repo)
 *.backup.json
 hybrid-trainer-backup-*.json
@@ -34,3 +38,7 @@ _progress.md
 
 # Garmin sync local debug log (dates + activity types; keep out of the public repo)
 sync_log.txt
+
+# Garmin outbound push: saved workout JSON reference payloads (personal
+# workout content, not app code; keep out of the public repo)
+sync/testdata/

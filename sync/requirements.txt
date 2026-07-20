@@ -1,6 +1,14 @@
-# Deps for the Garmin -> Hybrid Trainer sync (sync/garmin_sync.py and
-# sync/seed_tokens.py). garminconnect is the unofficial Garmin Connect
-# client (it can break when Garmin changes things — the workflow fails
-# loudly if so); supabase is the official Python client.
-garminconnect>=0.2.25
+# Deps for the Garmin <-> Hybrid Trainer sync (sync/garmin_sync.py reads,
+# sync/garmin_push.py writes, sync/seed_tokens.py seeds auth). garminconnect
+# is the unofficial Garmin Connect client (it can break when Garmin changes
+# things — the workflows fail loudly if so); supabase is the official
+# Python client.
+#
+# Floor raised 0.2.25 -> 0.3.0 (Garmin_Outbound_Spec.md 1.3): 0.2.25 predates
+# upload_workout/schedule_workout entirely (added 0.2.39/0.2.40), and its
+# garth-era cached tokens are incompatible with the 0.3.x token format this
+# repo already uses — a resolver could otherwise pick an old version that
+# can neither read this repo's tokens nor write workouts. Locally tested at
+# 0.3.6.
+garminconnect>=0.3.0
 supabase>=2.4
