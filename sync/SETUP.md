@@ -87,6 +87,81 @@ cloud), or skipped (strength). Anything already imported via the manual
 TCX importer is recognized and skipped too — same `garmin:<timestamp>`
 dedupe key.
 
+## Pushing a workout to Garmin (outbound, Phase 2)
+
+The sync above only reads FROM Garmin. `sync/garmin_push.py` writes TO it:
+pick one of your saved lifts templates, and it fills in your most recent
+weights/reps for each exercise (the same thing the app's Log form does when
+you load a template), uploads it as a structured strength workout, and
+schedules it to a date — so it shows up on your Forerunner 965 and guides
+you through the lift at the gym. Full design: `outputs/Garmin_Outbound_Spec.md`.
+
+**Local only, on purpose.** Unlike the daily sync, this is never scheduled
+and has no "Run workflow" button (yet) — you run it from your own terminal
+when you want a workout on the watch. It's a real write to your real Garmin
+account, so it stays a deliberate, manual action.
+
+**One-time setup:** same as above (Python deps installed, tokens seeded).
+The push does NOT need its own token setup.
+
+**Before running it locally**, export these as real environment variables in
+your terminal (a GitHub secret only exists inside GitHub's servers — running
+locally means your own shell has to know them instead):
+
+```bash
+export SUPABASE_URL="https://rrrfmudypfhywiremudw.supabase.co"
+export SUPABASE_ANON_KEY="the anon/public key from index.html"
+export HT_EMAIL="the email you sign into Hybrid Trainer with"
+export HT_PASSWORD="your Hybrid Trainer password"
+```
+
+`SUPABASE_URL`/`SUPABASE_ANON_KEY` are needed every run. **`HT_EMAIL`/
+`HT_PASSWORD` are only needed the FIRST time** (or whenever your saved
+session eventually goes stale) — a successful sign-in saves a session file
+at `~/.hybridtrainer_session.json` (outside the repo, file permissions
+600 — only your Mac user account can read it, and it holds a session token,
+never your actual password) and every run after that reuses and refreshes
+it automatically. If that saved session ever stops working, the script
+quietly falls back to asking for `HT_EMAIL`/`HT_PASSWORD` again — no manual
+re-seed step like Garmin's tokens need. Delete
+`~/.hybridtrainer_session.json` any time to force a fresh sign-in (e.g. if
+you change your Hybrid Trainer password). Never commit any of this.
+
+**Run it:**
+
+```bash
+python3 sync/garmin_push.py --push --template "CHEST" --date 2026-07-22
+```
+
+`--template` must exactly match a saved lifts template's name (case
+matters — check Templates in the app). `--date` is the calendar date
+(YYYY-MM-DD) to schedule it to.
+
+**What you'll see:** a log line per step of the process (sign-in, template
+found, workout mapped, uploaded, scheduled), then a **push report** listing
+every set that couldn't be filled in cleanly — no weight/reps history yet
+for that exercise, a logged value like "115/110" that isn't a single
+number, or a myo-rep/drop set (Garmin's workout model has no such thing, so
+it uploads as a plain step you advance by hand). Nothing is ever silently
+dropped — if a set isn't in the report, it mapped cleanly.
+
+**Running it again for the same template and date is safe.** It deletes its
+own previous push for that exact template+date first, then creates a fresh
+one — so you never end up with two workouts on the watch for the same day.
+It only ever touches a workout it named itself this way; it can't reach
+anything you built by hand in Garmin Connect.
+
+**Weight unit:** only works today if your Hybrid Trainer Units setting
+(Settings tab) is **lb**. A kg account fails loud with an explanation rather
+than risk showing the wrong number on your wrist — see the spec if you
+want to add verified kilogram support.
+
+**New exercise names:** the script only knows Garmin's official name for
+exercises it's been told about by hand (`EXERCISE_TAXONOMY` near the top of
+`sync/garmin_push.py`). An exercise it doesn't recognize still uploads (as a
+plain step with just the rep target — no name or animation on the watch)
+and shows up in the report so you know to add it.
+
 ## When tokens expire (~1 year) or the workflow fails with a token error
 
 The failure message in the Actions log says exactly this, but for the
