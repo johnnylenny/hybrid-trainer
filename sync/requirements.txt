@@ -10,5 +10,12 @@
 # repo already uses — a resolver could otherwise pick an old version that
 # can neither read this repo's tokens nor write workouts. Locally tested at
 # 0.3.6.
-garminconnect>=0.3.0
+#
+# garminconnect pinned to an EXACT version, not a floor (S9,
+# Security_Audit_HT.md): it's an unofficial reverse-engineered client, and
+# garmin-sync.yml installs it fresh on every unattended daily cron run with
+# no human review — a floor (>=0.3.0) would auto-pick up a bad or malicious
+# release within 24 hours. Bumping this version is a deliberate, reviewed
+# edit to this file, same as any other dependency change.
+garminconnect==0.3.6
 supabase>=2.4
