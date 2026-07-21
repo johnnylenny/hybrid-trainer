@@ -1,8 +1,34 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.56.0: wired the confirmed favicon/logo set into <head>. The browser-tab favicon now uses favicon.svg + favicon-96x96.png + favicon.ico (moved from the untracked favicon/ folder at the repo root into assets/, matching the "icons live in assets/" convention), replacing the old single assets/icon-192.png fallback. apple-touch-icon stays on the existing assets/icon-180.png — visually confirmed the same HT mark at the right 180x180 size already, so it needed no change. favicon/site.webmanifest was deliberately NOT moved or wired in: it's RealFaviconGenerator's generic template (name "MyWebSite"/"MySite", wrong theme/background colors, two icon paths that don't exist in this repo) and would have shipped a second, wrong PWA identity next to the real manifest.json (correct name "Hybrid Trainer", BRAND.md's colors), which is unchanged. HT-logo.png (the 512x512 source mark) stays untracked at the repo root on purpose — nothing in <head> loads it directly, and this release was scoped to the favicon/ set only. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
-  Previous: v0.55.1 was a same-session refinement of the v0.55.0 Open Graph release: added og:site_name and tightened the meta/og/twitter description to BRAND.md's exact pre-approved one-liner, after pasting the live URL into a public OG-preview tool surfaced both gaps. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.57.0: security hardening release, executing outputs/Security_Audit_HT.md briefs 1+2 (S1, S2, S3, S13 — the four findings the owner chose to fix this pass; S4/S5 from the same audit brief were left for later). Every fix here closes an unescaped render path where untrusted data (an attacker's challenge, an imported workout) could reach innerHTML as live markup instead of text. challengeModalitiesLabel() (S1) now escapes an unrecognized modality key instead of returning it raw — this was the audit's one High finding, a stored-XSS path any accepted friend or challenge co-member could reach and use to steal the victim's Supabase auth JWT out of localStorage. The matching server-side half (a whitelist + CHECK constraint in create_challenge) is written but NOT run — _local/migrations/security-hardening-s1-modalities.sql needs the owner's go-ahead in the Supabase SQL editor, per change control. The exercise-name autocomplete (S2) no longer builds an inline onmousedown="pickName(...)" attribute (an imported name containing a `"` could break out of it); it now sets data-name and reads it back via one delegated listener. escapeJs() is hardened to also escape ", <, > (previously only backslash/quote) in case anything reuses it. The end-time save modal (S3) escapes an imported endTime in both the confirmation message and the input's value attribute, and normalizeImportedSession() now format-checks endTime the same way it already checks date. starterCardHtml() (S13) escapes type in its tag span; id switched from an inline onclick to data-starter-id + a delegated listener on #templates-list (escaping id alone tested as insufficient — the browser HTML-decodes an attribute before compiling an inline handler's JS, so an encoded quote still closed the string) — latent only today since starter_templates has no write policy, hardened anyway. No SCHEMA_VERSION change (stays 16): every fix is render/validation-only, the export shape is untouched. Two CI-only riders shipped alongside (S9, S10) — pinned the garminconnect dependency to an exact version and SHA-pinned the three GitHub Actions in garmin-sync.yml — as a separate, unversioned commit (sync/.github changes don't bump APP_VERSION).
+  Previous: v0.56.0 wired the confirmed favicon/logo set into <head> — the browser-tab favicon and iOS home-screen icon now use the real HT mark end to end, moved from an untracked favicon/ folder into assets/. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.57.0:
+    - S1 (High, the audit's top finding): challengeModalitiesLabel() escapes
+      an unknown modality key instead of returning it raw, closing a stored-
+      XSS path reachable by any accepted friend or challenge co-member
+      (invite card, your-challenges card, and the Stats grid sub/note all
+      read from this one function, so the fix covers all of them at once).
+      Server-side whitelist + CHECK constraint written as a migration but
+      NOT run — needs the owner's go-ahead (change control).
+    - S2: exercise-name autocomplete switched from an inline onmousedown
+      attribute to data-name + a delegated mousedown listener; escapeJs()
+      hardened to also escape ", <, > for any future reuse.
+    - S3: end-time save modal escapes an imported endTime (message text and
+      the input's value attribute); normalizeImportedSession() format-checks
+      endTime like it already does date.
+    - S13: starterCardHtml() escapes type; id moved off an inline onclick
+      onto data-starter-id + a delegated listener (escaping id in place
+      tested exploitable — HTML-decoding an attribute before compiling an
+      inline handler restores the attacker's quote character; confirmed
+      live, then fixed the same way as S2). Latent hardening either way —
+      no live write path to starter_templates today.
+    - Riders (sync/.github only, no APP_VERSION bump): S9 pinned
+      garminconnect to an exact version; S10 SHA-pinned the three GitHub
+      Actions steps in garmin-sync.yml.
+    - No SCHEMA_VERSION change (stays 16). Full findings + verification:
+      outputs/Security_Audit_HT.md.
 
   What's new in v0.56.0:
     - Wired the confirmed favicon/logo set into <head>: <link rel="icon">
@@ -1349,7 +1375,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.56.0</small>
+      <small>v0.57.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1669,7 +1695,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.56.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.57.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1707,7 +1733,7 @@
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
 const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.56.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const APP_VERSION = 'v0.57.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -3659,8 +3685,16 @@ function wireAutocomplete(i) {
     const names = allKnownExerciseNames().filter(n => q && n.toLowerCase().includes(q) && n.toLowerCase() !== q);
     if (names.length === 0) { list.style.display = 'none'; return; }
     list.style.display = 'block';
-    list.innerHTML = names.slice(0, 8).map(n => `<div class="autocomplete-item" onmousedown="pickName(${i},'${escapeJs(n)}')">${escapeHtml(n)}</div>`).join('');
+    // data-name (not an inline onmousedown) so an exercise name that carries
+    // an HTML/attribute-breakout payload (S2, Security_Audit_HT.md — e.g. an
+    // imported name) can't inject a live tag; the delegated listener below
+    // reads it back through .dataset, never through markup.
+    list.innerHTML = names.slice(0, 8).map(n => `<div class="autocomplete-item" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('');
   }
+  list.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.autocomplete-item');
+    if (item) pickName(i, item.dataset.name);
+  });
   input.addEventListener('input', () => {
     state.currentSession.exercises[i].name = input.value;
     saveState(); updateList();
@@ -4322,11 +4356,20 @@ function addStarterToMyTemplates(id) {
 }
 // One starter/preset card (used for both built-in presets and cloud starters).
 function starterCardHtml(s) {
+  // type/id are latent, not exploitable today (starter_templates has no
+  // write policy — see S13, Security_Audit_HT.md) but escape them like
+  // name/category so a future write path or bad seed row can't inject.
+  // id is a data-attribute, not an inline onclick argument: an inline
+  // onclick="fn('${escapeHtml(id)}')" is NOT actually safe even escaped
+  // (the browser HTML-decodes the attribute before compiling it as the
+  // handler's JS source, so an encoded quote still closes the JS string —
+  // confirmed live while testing this fix), so this uses the same
+  // data-attribute + delegated-listener pattern as S2 instead.
   return `
     <div class="card">
       <div class="header-row" style="margin-bottom:8px">
-        <h3>${escapeHtml(s.name)} <span class="tag">${s.type}</span>${s.category ? ` <span class="tag">${escapeHtml(s.category)}</span>` : ''}</h3>
-        <button class="btn-small" onclick="addStarterToMyTemplates('${s.id}')">Add</button>
+        <h3>${escapeHtml(s.name)} <span class="tag">${escapeHtml(s.type)}</span>${s.category ? ` <span class="tag">${escapeHtml(s.category)}</span>` : ''}</h3>
+        <button class="btn-small" data-starter-id="${escapeHtml(s.id)}">Add</button>
       </div>
       <pre>${escapeHtml(templateSummaryText(s))}</pre>
     </div>`;
@@ -4372,6 +4415,16 @@ function renderTemplates() {
       </div>
     `).join('');
   c.innerHTML = topHtml + starterHtml + yourHeader + listHtml;
+  if (!renderTemplates._wired) {
+    // Delegated so it survives every innerHTML replacement above (same
+    // idiom as renderLog._wired). Scoped to [data-starter-id] so it never
+    // fires for the plain .btn-small Rename buttons in the same container.
+    c.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-starter-id]');
+      if (btn) addStarterToMyTemplates(btn.dataset.starterId);
+    });
+    renderTemplates._wired = true;
+  }
 }
 async function renameTemplate(i) {
   const name = await modalPrompt('New name?', state.templates[i].name);
@@ -4406,8 +4459,11 @@ function endTimeAndSaveModal(initial) {
     const fmt = d => pad(d.getHours()) + ':' + pad(d.getMinutes());
     const hadExisting = !!initial;
     const startVal = initial || fmt(new Date());
+    // initial can come from an imported session's endTime (S3,
+    // Security_Audit_HT.md — normalizeImportedSession doesn't format-check
+    // it), so escape both the text and the attribute use rather than trust it.
     const message = hadExisting
-      ? 'You already set an end time of ' + initial + '. Keep it, change it, or save with no end time.'
+      ? 'You already set an end time of ' + escapeHtml(initial) + '. Keep it, change it, or save with no end time.'
       : 'When did you finish? Defaults to now — or save without an end time (handy for logging old workouts).';
 
     const o = document.createElement('div');
@@ -4417,7 +4473,7 @@ function endTimeAndSaveModal(initial) {
       '<div class="modal-box" role="dialog" aria-modal="true">' +
         '<h3 class="modal-title">End workout & save</h3>' +
         '<p class="modal-message">' + message + '</p>' +
-        '<input id="endtime-input" class="modal-input" type="time" value="' + startVal + '">' +
+        '<input id="endtime-input" class="modal-input" type="time" value="' + escapeHtml(startVal) + '">' +
         '<div class="endtime-chips" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">' +
           '<button type="button" class="btn-small" data-off="0">Now</button>' +
           '<button type="button" class="btn-small" data-off="5">-5m</button>' +
@@ -6255,6 +6311,10 @@ function normalizeImportedSession(raw) {
   if (!['lifts','run','conditioning'].includes(base.type)) base.type = 'lifts';
   if (!base.id || typeof base.id !== 'string') base.id = crypto.randomUUID();
   if (!base.date || !/^\d{4}-\d{2}-\d{2}$/.test(base.date)) base.date = todayYmd();
+  // endTime feeds straight into endTimeAndSaveModal's message/value attribute
+  // (S3, Security_Audit_HT.md) — format-check it here too, same spirit as the
+  // date check above, rather than rely on escaping alone at the render site.
+  if (base.endTime && !/^\d{2}:\d{2}$/.test(base.endTime)) base.endTime = '';
   if (!Array.isArray(base.exercises)) base.exercises = [];
   if (!base.runData || typeof base.runData !== 'object') base.runData = {};
   if (!base.condData || typeof base.condData !== 'object') base.condData = {};
@@ -6382,7 +6442,16 @@ function escapeHtml(str) {
   if (str === undefined || str === null) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
-function escapeJs(str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+// For a JS-string argument embedded inside a double-quoted inline event
+// attribute, e.g. onclick="fn('${escapeJs(x)}')": JS-escape backslash/quote
+// first (so the JS parser sees an escaped quote, not a string terminator),
+// then HTML-attribute-escape the result (so ", <, > can't break out of the
+// surrounding double-quoted attribute — S2, Security_Audit_HT.md; the
+// original version only did the first half).
+function escapeJs(str) {
+  return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 // =====================================================================
 // CUSTOM MODALS + TOASTS  (replace native confirm / alert / prompt)
@@ -6804,8 +6873,11 @@ function fmtChallengeDate(ymd) {
     .toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 function challengeModalitiesLabel(mods) {
+  // Unknown keys fall back to the raw token, which for a bad-actor row (S1,
+  // Security_Audit_HT.md) can be attacker-controlled HTML — escape it so it
+  // renders as inert text at every call site instead of trusting the DB value.
   return (mods || '').split(',').filter(Boolean).map(k => {
-    const m = CHALLENGE_MODALITIES.find(x => x.key === k); return m ? m.label : k;
+    const m = CHALLENGE_MODALITIES.find(x => x.key === k); return m ? m.label : escapeHtml(k);
   }).join(' + ');
 }
 
