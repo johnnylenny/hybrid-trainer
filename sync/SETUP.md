@@ -137,6 +137,11 @@ python3 sync/garmin_push.py --push --template "CHEST" --date 2026-07-22
 matters — check Templates in the app). `--date` is the calendar date
 (YYYY-MM-DD) to schedule it to.
 
+**Rests are built in.** Every set (warm-ups included, and the last set too)
+is followed by a rest step that waits for a lap-button press — it never
+auto-advances. That rest screen is also where the watch lets you adjust the
+reps and weight it just logged, so take as long as you need.
+
 **What you'll see:** a log line per step of the process (sign-in, template
 found, workout mapped, uploaded, scheduled), then a **push report** listing
 every set that couldn't be filled in cleanly — no weight/reps history yet

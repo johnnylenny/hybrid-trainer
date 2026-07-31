@@ -49,10 +49,13 @@ HT_EMAIL/HT_PASSWORD, RLS intact) garmin_sync.py already uses, just read
 instead of written — mirrors the app's own prefillExercisesFromLast() to
 fill each set's weight/reps from the most recent matching session, maps
 exercise names through a small hand-built table (EXERCISE_TAXONOMY below;
-no fuzzy matching — spec 1.4), and pushes a flat one-step-per-set workout
-(no rest steps, no repeat groups — the self-test's flat shape, proven in
-Phase 1, kept deliberately simple rather than replicating Garmin Connect's
-messier hand-built nesting). Every set that can't map cleanly (no prior
+no fuzzy matching — spec 1.4), and pushes a flat workout: one step per
+set, each followed by a lap.button rest step — the rest screen is where the
+FR965 lets you adjust the finished set's reps/weight, so there is one after
+EVERY set including the last (added 2026-07-22 at Johnny's ask; shape from
+the reference payload's own rests). Still no repeat groups — the flat shape
+proven in Phase 1, kept deliberately simple rather than replicating Garmin
+Connect's messier hand-built nesting. Every set that can't map cleanly (no prior
 history, an unparseable weight/rep string, a myo-rep/drop set Garmin has no
 structure for, an exercise name with no taxonomy entry) still uploads — as a
 plain step with that one target omitted — and is named in a printed report;
@@ -325,6 +328,7 @@ EXERCISE_TAXONOMY = {
 
 GARMIN_STEP_TYPE_WARMUP = {"stepTypeId": 1, "stepTypeKey": "warmup"}
 GARMIN_STEP_TYPE_WORKING = {"stepTypeId": 3, "stepTypeKey": "interval"}
+GARMIN_STEP_TYPE_REST = {"stepTypeId": 5, "stepTypeKey": "rest"}
 GARMIN_END_COND_REPS = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
 GARMIN_END_COND_MANUAL = {"conditionTypeId": 1, "conditionTypeKey": "lap.button"}
 GARMIN_NO_TARGET = {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
@@ -468,6 +472,25 @@ def build_myo_drop_step(order, label, category, garmin_name, set_type, sequence_
     }
 
 
+def build_rest_step(order):
+    """A rest step after EVERY set step, including the last one. lap.button
+    end (not a timer): the watch sits in the rest screen until the button is
+    pressed, and that screen is also where the FR965 lets you log/adjust the
+    reps and weight of the set just finished — so no rest may auto-advance
+    out from under an edit. Shape cloned from the reference payload's own
+    rest steps (sync/testdata/reference_workout.json); category/exerciseName
+    stay None there too — a rest belongs to no exercise."""
+    return {
+        "type": "ExecutableStepDTO",
+        "stepOrder": order,
+        "stepType": dict(GARMIN_STEP_TYPE_REST),
+        "category": None,
+        "exerciseName": None,
+        "endCondition": dict(GARMIN_END_COND_MANUAL),
+        "targetType": dict(GARMIN_NO_TARGET),
+    }
+
+
 def map_template_to_workout(template, history, target_date):
     """The mapper (spec 1.4/1.6): a lifts template + session history -> a
     flat-step Garmin strength workout dict ready for push_workout(). Caller
@@ -511,6 +534,8 @@ def map_template_to_workout(template, history, target_date):
             else:
                 steps.append(build_set_step(order, label, category, garmin_name,
                                              s["type"], s.get("weight", ""), s.get("reps", ""), report))
+            order += 1
+            steps.append(build_rest_step(order))
 
     if not steps:
         raise MapperError(f"Template {template.get('name')!r} produced zero sets — nothing to push.")

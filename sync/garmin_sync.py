@@ -52,7 +52,12 @@ except ImportError:
 
 TOKEN_DIR = os.path.expanduser(os.getenv("GARMIN_TOKEN_DIR", "~/.garminconnect"))
 REQUEST_DELAY_SECONDS = 0.5  # pause between Garmin API calls (be polite)
-FETCH_DAYS = 3               # small overlapping window; dedupe makes overlap harmless
+FETCH_DAYS = 14              # overlapping window; dedupe makes overlap harmless. Was 3
+                             # until the 2026-07-21..31 token outage proved a broken
+                             # week silently loses activities: a run older than the
+                             # window when CI recovers is never fetched again. 14 lets
+                             # an outage up to two weeks self-heal on the first green
+                             # run (costs ~1 extra lap fetch per new run, nothing more).
 LOG_PATH = os.getenv("SYNC_LOG_PATH", "sync_log.txt")
 
 RESEED_HELP = """
