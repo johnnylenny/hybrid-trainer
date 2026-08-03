@@ -3,7 +3,7 @@
 garmin_sync.py — daily Garmin Connect -> Hybrid Trainer cloud sync.
 
 Runs in GitHub Actions (see .github/workflows/garmin-sync.yml). Fetches the
-last 3 days of Garmin activities, maps each one to a Hybrid Trainer session
+last FETCH_DAYS days of Garmin activities, maps each one to a Hybrid Trainer session
 row (same shapes the webapp's TCX importer produces), and inserts the new
 ones into the Supabase `sessions` table, signed in as the app user so RLS
 applies normally.
@@ -60,15 +60,51 @@ FETCH_DAYS = 14              # overlapping window; dedupe makes overlap harmless
                              # run (costs ~1 extra lap fetch per new run, nothing more).
 LOG_PATH = os.getenv("SYNC_LOG_PATH", "sync_log.txt")
 
+# Failure classes. Each gets a distinct exit code so garmin-sync.yml can print
+# ONE redacted line naming the class — the next failure is then diagnosable
+# without opening the log. Keep these in sync with the workflow's case block.
+EXIT_CONFIG = 10         # a secret/var is missing, or deps aren't installed
+EXIT_AUTH_GARMIN = 11    # cached Garmin tokens missing or rejected
+EXIT_GARMIN_API = 12     # logged in, but a Garmin API call failed
+EXIT_AUTH_SUPABASE = 13  # Supabase sign-in rejected
+EXIT_DATA = 14           # per-activity mapping/insert errors
+FAIL_CLASSES = {
+    EXIT_CONFIG: "CONFIG",
+    EXIT_AUTH_GARMIN: "AUTH-GARMIN",
+    EXIT_GARMIN_API: "GARMIN-API",
+    EXIT_AUTH_SUPABASE: "AUTH-SUPABASE",
+    EXIT_DATA: "DATA",
+}
+
+# Why the GARMIN_TOKENS secret goes stale on its own (the 2026-07-19..08-03
+# outage, root-caused 2026-08-03): the secret is a FROZEN SNAPSHOT. garth
+# refreshes tokens and writes the new ones back to ~/.garminconnect, so your
+# LOCAL copy self-heals every time you run any sync/ script. CI restores the
+# same snapshot every run and its refreshed tokens die with the runner, so
+# once the snapshot's refresh token stops being accepted, no future CI run can
+# ever revive it — it fails identically forever. That is why re-packing the
+# secret is the fix, and why a local script run that still works proves
+# nothing about CI.
 RESEED_HELP = """
-How to fix (one-time, on your own machine — NEVER add Garmin credentials to CI):
-  1. rm -rf ~/.garminconnect
-  2. python3 sync/seed_tokens.py          # logs in once, prompts for MFA
-  3. COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
-  4. Paste the clipboard into the GARMIN_TOKENS secret:
-     GitHub repo -> Settings -> Secrets and variables -> Actions
-Tokens last roughly a year. This script never attempts a password login —
-Garmin rate-limits those hard (429s, multi-day lockouts)."""
+How to fix (on your own machine — NEVER add Garmin credentials to CI):
+
+  FIRST TRY (no password, no MFA, no rate-limit risk). Your local tokens are
+  usually still alive even when the CI snapshot is dead:
+    1. python3 -c "from garminconnect import Garmin; c=Garmin(); \\
+         c.login('~/.garminconnect'); print('local tokens OK')"
+    2. If that printed OK, just re-pack them:
+       COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
+    3. Paste the clipboard into the GARMIN_TOKENS secret:
+       GitHub repo -> Settings -> Secrets and variables -> Actions
+    4. Actions -> Garmin sync -> Run workflow, and confirm it goes green.
+
+  ONLY IF step 1 also failed (a real re-seed, one password login):
+    rm -rf ~/.garminconnect && python3 sync/seed_tokens.py
+    then steps 2-4 above.
+
+Re-pack the secret after ANY local run of a sync/ script — a local run can
+rotate the refresh token and silently orphan the CI copy. This script never
+attempts a password login: Garmin rate-limits those hard (429s, lockouts)."""
 
 # Garmin activityType.typeKey -> Hybrid Trainer mapping
 RUNNING_TYPES = {
@@ -96,9 +132,13 @@ def log(msg):
         pass
 
 
-def fail(msg):
+def fail(msg, code=EXIT_CONFIG):
+    """Log the failure CLASS on its own first line, then the detail, then exit
+    with that class's code. The class line is what the workflow echoes as a
+    one-line annotation, so keep it short and free of anything sensitive."""
+    log(f"FAIL-CLASS: {FAIL_CLASSES.get(code, 'UNKNOWN')}")
     log("FATAL: " + str(msg))
-    sys.exit(1)
+    sys.exit(code)
 
 
 # ---------------------------------------------------------------------------
@@ -330,24 +370,27 @@ def garmin_login():
     could submit credentials to Garmin."""
     if not os.path.isdir(TOKEN_DIR) or not os.listdir(TOKEN_DIR):
         fail(f"No Garmin tokens found at {TOKEN_DIR}. The GARMIN_TOKENS "
-             f"secret is missing, empty, or didn't decode.{RESEED_HELP}")
+             f"secret is missing, empty, or didn't decode.{RESEED_HELP}",
+             EXIT_AUTH_GARMIN)
     try:
         client = Garmin()  # constructed WITHOUT credentials, on purpose
         client.login(TOKEN_DIR)
         log("Garmin: logged in with cached tokens.")
         return client
     except Exception as e:
-        fail(f"Garmin token login failed — tokens are likely expired or "
-             f"corrupt ({type(e).__name__}: {e}).{RESEED_HELP}")
+        fail(f"Garmin token login failed — the GARMIN_TOKENS snapshot is "
+             f"expired, rotated away, or corrupt ({type(e).__name__}: {e})."
+             f"{RESEED_HELP}", EXIT_AUTH_GARMIN)
 
 
 def main():
     if Garmin is None or create_client is None:
-        fail("Missing Python deps. Run: pip install -r sync/requirements.txt")
+        fail("Missing Python deps. Run: pip install -r sync/requirements.txt",
+             EXIT_CONFIG)
     for var in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "HT_EMAIL", "HT_PASSWORD"):
         if not os.getenv(var):
             fail(f"Missing required env var {var} (set it as a GitHub Actions "
-                 f"secret — see sync/SETUP.md).")
+                 f"secret — see sync/SETUP.md).", EXIT_CONFIG)
 
     client = garmin_login()
 
@@ -357,7 +400,8 @@ def main():
     try:
         activities = client.get_activities_by_date(start.isoformat(), end.isoformat()) or []
     except Exception as e:
-        fail(f"Garmin activity fetch failed: {type(e).__name__}: {e}")
+        fail(f"Garmin activity fetch failed: {type(e).__name__}: {e}",
+             EXIT_GARMIN_API)
     time.sleep(REQUEST_DELAY_SECONDS)
     log(f"Garmin returned {len(activities)} activities")
 
@@ -368,7 +412,8 @@ def main():
             "password": os.environ["HT_PASSWORD"],
         })
     except Exception as e:
-        fail(f"Supabase sign-in failed: {type(e).__name__}: {e}")
+        fail(f"Supabase sign-in failed: {type(e).__name__}: {e}",
+             EXIT_AUTH_SUPABASE)
     user_id = auth.user.id
     log("Supabase: signed in.")
 
@@ -395,7 +440,7 @@ def main():
         existing = {normalize_garmin_source(r["import_source"])
                     for r in (res.data or []) if r.get("import_source")}
     except Exception as e:
-        fail(f"Could not read existing sessions for dedupe: {e}")
+        fail(f"Could not read existing sessions for dedupe: {e}", EXIT_DATA)
     log(f"Cloud already has {len(existing)} garmin-sourced sessions")
 
     inserted, already, skipped_strength = 0, 0, 0
@@ -453,8 +498,11 @@ def main():
     if errors:
         # Non-zero exit -> the workflow goes red and uploads the log.
         # The next scheduled run retries the failed ones (dedupe skips the
-        # rest), so a transient failure self-heals.
-        sys.exit(1)
+        # rest), so a transient failure self-heals. Class DATA, not AUTH:
+        # everything authenticated fine, some activities just didn't map.
+        log(f"FAIL-CLASS: {FAIL_CLASSES[EXIT_DATA]}")
+        log(f"FATAL: {len(errors)} activities failed to map or insert.")
+        sys.exit(EXIT_DATA)
 
 
 if __name__ == "__main__":

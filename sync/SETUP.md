@@ -1,8 +1,9 @@
 # Garmin auto-sync — setup
 
 A GitHub Actions workflow (`.github/workflows/garmin-sync.yml`) runs daily at
-09:00 UTC and inserts your last 3 days of Garmin activities into the app's
-cloud `sessions` table. After the one-time setup below there are zero manual
+09:00 UTC and inserts your last 14 days of Garmin activities into the app's
+cloud `sessions` table (the window overlaps on purpose; dedupe makes that
+harmless, and it lets an outage self-heal on the first green run). After the one-time setup below there are zero manual
 steps — new activities just appear in the app (a fresh open pulls everything
 from the cloud; on a phone, returning to a backgrounded app usually triggers
 a fresh open too).
@@ -86,6 +87,66 @@ The run log shows one line per activity: inserted, skipped (already in
 cloud), or skipped (strength). Anything already imported via the manual
 TCX importer is recognized and skipped too — same `garmin:<timestamp>`
 dedupe key.
+
+## Fixing a red run
+
+Every failure prints ONE line naming the failure class, at the top of the run
+page (Actions → the red run). Read that line first — it tells you which of
+these five things broke, so you don't have to dig through the log:
+
+| Class | What broke | What to do |
+|---|---|---|
+| `AUTH-GARMIN` | The `GARMIN_TOKENS` secret was rejected by Garmin | Re-pack the secret — see below. Most common by far. |
+| `AUTH-SUPABASE` | Supabase rejected the sign-in | Your app password changed: update the `HT_PASSWORD` secret. |
+| `GARMIN-API` | Login worked, a Garmin call failed | Usually transient (rate limit or Garmin outage). Wait for tomorrow's run; dedupe stops doubles. |
+| `DATA` | Auth all fine, some activities didn't map | Download the debug-log artifact on the run page to see which dates. The next run retries them. |
+| `CONFIG` / `INSTALL` | A secret/variable is missing, or `pip install` failed | Re-check the secrets table above; `INSTALL` means the pinned dep couldn't be fetched. |
+
+### Why `AUTH-GARMIN` happens on its own, and why re-packing is the fix
+
+**The secret is a frozen snapshot.** `garth` (the auth library) refreshes
+tokens and writes the new ones back to `~/.garminconnect`, so your **local**
+copy heals itself every time you run any `sync/` script. CI restores the same
+snapshot on every run and its refreshed tokens die with the runner. Once the
+snapshot's refresh token stops being accepted, **no future CI run can revive
+it** — it fails identically forever, in about 18 seconds, until you re-pack.
+
+Two consequences worth knowing:
+
+- **A local script working proves nothing about CI.** They use different
+  copies of the tokens. (This is exactly what hid the 2026-07-19 → 08-03
+  outage: local Garmin work kept succeeding the whole time.)
+- **Re-pack the secret after any local run of a `sync/` script.** A local run
+  can rotate the refresh token and silently orphan the CI copy.
+
+### Re-packing (about 2 minutes, usually no password needed)
+
+Try this first. Your local tokens are usually still alive even when the CI
+snapshot is dead, and this path involves **no password and no MFA**, so there
+is no rate-limit risk:
+
+```bash
+python3 -c "from garminconnect import Garmin; c=Garmin(); c.login('~/.garminconnect'); print('local tokens OK')"
+```
+
+If that printed `local tokens OK`, re-pack them and paste into the secret:
+
+```bash
+COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
+```
+
+GitHub repo → **Settings → Secrets and variables → Actions** → `GARMIN_TOKENS`
+→ **Update secret** → paste → **Update secret**. Then **Actions → Garmin sync
+→ Run workflow** and confirm it goes green.
+
+**Only if the check above also failed** do you need a real re-seed (one
+password login, MFA prompt):
+
+```bash
+rm -rf ~/.garminconnect && python3 sync/seed_tokens.py
+```
+
+then re-pack and paste as above.
 
 ## Pushing a workout to Garmin (outbound, Phase 2)
 

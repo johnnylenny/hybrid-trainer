@@ -37,15 +37,25 @@ jobs:
           GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
         run: |
           if [ -z "$GARMIN_TOKENS" ]; then
-            echo "::error::GARMIN_TOKENS secret is missing. Seed tokens locally: run 'python3 sync/seed_tokens.py' on your machine, then 'COPYFILE_DISABLE=1 tar czf - -C \"\$HOME\" .garminconnect | base64 | pbcopy' and paste into the GARMIN_TOKENS repo secret. Full steps: sync/SETUP.md. No Garmin login was attempted."
+            echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — the GARMIN_TOKENS secret is missing or empty. Re-pack it per sync/SETUP.md 'Fixing a red run'. No Garmin login was attempted."
             exit 1
           fi
-          echo "$GARMIN_TOKENS" | base64 -d | tar xzf - -C "$HOME"
+          if ! echo "$GARMIN_TOKENS" | base64 -d | tar xzf - -C "$HOME"; then
+            echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — the GARMIN_TOKENS secret did not decode (bad base64 or truncated paste). Re-pack it per sync/SETUP.md 'Fixing a red run'. No Garmin login was attempted."
+            exit 1
+          fi
           chmod -R go-rwx "$HOME/.garminconnect"
 
       - name: Install dependencies
-        run: pip install -r sync/requirements.txt
+        run: |
+          if ! pip install -r sync/requirements.txt; then
+            echo "::error title=Garmin sync failed [INSTALL]::FAIL-CLASS: INSTALL — pip install failed. Deps are pinned (garminconnect==0.3.6); a pinned version going missing or a pip/Python change is the usual cause. Not an auth problem: no Garmin or Supabase call was made."
+            exit 1
+          fi
 
+      # Exit codes are the failure CLASS, defined in sync/garmin_sync.py
+      # (EXIT_CONFIG=10 ... EXIT_DATA=14). Each maps to ONE redacted line so a
+      # failure is diagnosable from the run page without opening the log.
       - name: Run sync
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -53,7 +63,21 @@ jobs:
           HT_EMAIL: ${{ secrets.HT_EMAIL }}
           HT_PASSWORD: ${{ secrets.HT_PASSWORD }}
           EASY_HR_CEILING: ${{ vars.EASY_HR_CEILING }}
-        run: python sync/garmin_sync.py
+        run: |
+          set +e
+          python sync/garmin_sync.py
+          code=$?
+          set -e
+          case "$code" in
+            0)  exit 0 ;;
+            11) echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — the GARMIN_TOKENS secret was rejected by Garmin. It is a frozen snapshot and cannot self-heal; re-pack it (your LOCAL tokens are usually still fine, so no password login is needed). Steps: sync/SETUP.md 'Fixing a red run'. No credential login was attempted." ;;
+            13) echo "::error title=Garmin sync failed [AUTH-SUPABASE]::FAIL-CLASS: AUTH-SUPABASE — Supabase rejected the sign-in. Check the HT_EMAIL / HT_PASSWORD secrets (app password changed?). Garmin auth succeeded, so tokens are fine." ;;
+            12) echo "::error title=Garmin sync failed [GARMIN-API]::FAIL-CLASS: GARMIN-API — logged in fine, but a Garmin API call failed (rate limit or Garmin outage). Usually transient: the next daily run retries and dedupe prevents doubles." ;;
+            14) echo "::error title=Garmin sync failed [DATA]::FAIL-CLASS: DATA — auth was fine end to end; one or more activities failed to map or insert. See the uploaded debug log for which dates. The next run retries them." ;;
+            10) echo "::error title=Garmin sync failed [CONFIG]::FAIL-CLASS: CONFIG — a required secret or variable is missing, or deps are not importable. See sync/SETUP.md step 3." ;;
+            *)  echo "::error title=Garmin sync failed [UNKNOWN]::FAIL-CLASS: UNKNOWN — unclassified exit code $code (an unhandled exception in sync/garmin_sync.py). See the uploaded debug log." ;;
+          esac
+          exit "$code"
 
       # Redacted debug log (dates, activity types, insert/skip decisions —
       # no activity names, no HR data, no secrets). Only kept on failure.
