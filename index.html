@@ -1,8 +1,34 @@
 <!DOCTYPE html>
 <!--
-  HYBRID TRAINER v0.57.0: security hardening release, executing outputs/Security_Audit_HT.md briefs 1+2 (S1, S2, S3, S13 — the four findings the owner chose to fix this pass; S4/S5 from the same audit brief were left for later). Every fix here closes an unescaped render path where untrusted data (an attacker's challenge, an imported workout) could reach innerHTML as live markup instead of text. challengeModalitiesLabel() (S1) now escapes an unrecognized modality key instead of returning it raw — this was the audit's one High finding, a stored-XSS path any accepted friend or challenge co-member could reach and use to steal the victim's Supabase auth JWT out of localStorage. The matching server-side half (a whitelist + CHECK constraint in create_challenge) is written but NOT run — _local/migrations/security-hardening-s1-modalities.sql needs the owner's go-ahead in the Supabase SQL editor, per change control. The exercise-name autocomplete (S2) no longer builds an inline onmousedown="pickName(...)" attribute (an imported name containing a `"` could break out of it); it now sets data-name and reads it back via one delegated listener. escapeJs() is hardened to also escape ", <, > (previously only backslash/quote) in case anything reuses it. The end-time save modal (S3) escapes an imported endTime in both the confirmation message and the input's value attribute, and normalizeImportedSession() now format-checks endTime the same way it already checks date. starterCardHtml() (S13) escapes type in its tag span; id switched from an inline onclick to data-starter-id + a delegated listener on #templates-list (escaping id alone tested as insufficient — the browser HTML-decodes an attribute before compiling an inline handler's JS, so an encoded quote still closed the string) — latent only today since starter_templates has no write policy, hardened anyway. No SCHEMA_VERSION change (stays 16): every fix is render/validation-only, the export shape is untouched. Two CI-only riders shipped alongside (S9, S10) — pinned the garminconnect dependency to an exact version and SHA-pinned the three GitHub Actions in garmin-sync.yml — as a separate, unversioned commit (sync/.github changes don't bump APP_VERSION).
-  Previous: v0.56.0 wired the confirmed favicon/logo set into <head> — the browser-tab favicon and iOS home-screen icon now use the real HT mark end to end, moved from an untracked favicon/ folder into assets/. Client data shape untouched: no SCHEMA_VERSION change (stays 16), no migration, no RLS change.
+  HYBRID TRAINER v0.58.0: closes the strength loop (owner ruling 2026-08-18: the watch is the source of truth for lifts on watch-guided days, never double-logged). sync/garmin_sync.py no longer skips strength_training activities — completed watch workouts import as review-first 'lifts' sessions, built from get_activity_exercise_sets (active sets only; rest steps excluded). Exercises reverse-map through garmin_push.py's EXERCISE_TAXONOMY, imported rather than duplicated so both push and pull directions stay taught from one table (an unmapped exercise imports under a readable Garmin-derived name and is named in the run report, never dropped). Weight converts grams -> lb, rounded to the nearest 0.5lb (a real gym increment that also absorbs a few-hundredths-of-a-pound round-trip noise observed directly in Garmin's own data); a kg-unit account fails loud instead of guessing, same precedent as garmin_push.py's weight push. Safety: an activity is skipped, and said so in the log, if a 'lifts' session already exists for that date — hand-logged or previously synced, not just the existing import_source dedupe. Imported sessions are never silently trusted: cond_data.reviewPending (the one jsonb bucket free on a lifts session without a DB migration) drives an "Imported - review" History badge, and opening the session — the existing tap-to-edit interaction, editHistorySession — clears the flag both locally and in the cloud. SCHEMA_VERSION bumped 16->17 for the new recognized condData key, same bump rule set.done/importSource already followed (no DB migration, no RLS change). No change to any shared TCX/classifier helper.
+  Previous: v0.57.0 was a security hardening release (S1/S2/S3/S13 render/escaping fixes closing a High-severity stored-XSS path in challenge modality rendering, + S9/S10 CI riders pinning garminconnect and SHA-pinning garmin-sync.yml's actions). Server-side S1 migration still awaiting the owner's go-ahead. No SCHEMA_VERSION change (stayed 16).
   Single HTML file. Loads Chart.js and Supabase client from CDN.
+
+  What's new in v0.58.0:
+    - Closes the strength loop (owner ruling 2026-08-18): sync/garmin_sync.py
+      no longer skips strength_training activities. Completed watch workouts
+      import as 'lifts' sessions, built from get_activity_exercise_sets (not
+      the activity summary) — active sets only, rest steps excluded.
+    - Exercises reverse-map through garmin_push.py's EXERCISE_TAXONOMY,
+      imported (not duplicated) so both push and pull directions stay in
+      sync from one table. An unmapped exercise imports under a readable
+      Garmin-derived name and is named in the run report, never dropped.
+    - Weight: grams -> lb, rounded to the nearest 0.5lb (real gym increment;
+      also absorbs Garmin's own few-hundredths-of-a-pound round-trip noise).
+      A kg-unit account fails loud instead of guessing, same precedent as
+      garmin_push.py's weight push.
+    - Safety: an activity is skipped (and said so in the log) if a 'lifts'
+      session already exists for that date, hand-logged or previously
+      synced — the owner's no-double-logging rule, not just the existing
+      import_source dedupe.
+    - Review-first, never silent: imported sessions carry
+      cond_data.reviewPending (the one jsonb bucket free on a lifts session
+      without a DB migration) and show an "Imported - review" History
+      badge. Opening the session — the existing tap-to-edit interaction —
+      clears the flag locally and in the cloud (editHistorySession).
+    - SCHEMA_VERSION 16 -> 17: a new recognized condData key, same bump
+      rule set.done/importSource already followed. No DB migration, no RLS
+      change. No change to any shared TCX/classifier helper.
 
   What's new in v0.57.0:
     - S1 (High, the audit's top finding): challengeModalitiesLabel() escapes
@@ -1050,6 +1076,7 @@
     margin-left: 4px; vertical-align: middle;
   }
   .tag.garmin { color: var(--info); }
+  .tag.review { color: var(--info); }
   .header-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   pre { white-space: pre-wrap; font-size: 0.9rem; color: var(--text-muted); font-family: inherit; line-height: 1.6; }
   .autocomplete { position: relative; flex: 1; }
@@ -1375,7 +1402,7 @@
   <div>
     <h1>Hybrid Trainer</h1>
     <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-      <small>v0.57.0</small>
+      <small>v0.58.0</small>
       <span id="sync-indicator" class="sync-indicator" style="display:none"></span>
     </div>
     <div id="auth-badge" class="signed-in-badge" style="display:none; margin-top:6px;">
@@ -1695,7 +1722,7 @@
   </div>
 
   <div class="card compact">
-    <small>v0.57.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
+    <small>v0.58.0 · PWA-ready, new palette web app · data lives in this browser's localStorage</small>
   </div>
 </section>
 
@@ -1732,8 +1759,8 @@
 // no migration is gated on it. (Bumped here in app v0.23.0.)
 // 15 = added the session-level `importSource` field (+ `import_source` DB column)
 // for external-import dedupe. First source is Hevy CSV import (app v0.25.0).
-const SCHEMA_VERSION = 16;
-const APP_VERSION = 'v0.57.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
+const SCHEMA_VERSION = 17;
+const APP_VERSION = 'v0.58.0'; // display/build version (separate from the data SCHEMA_VERSION); attached to feedback
 const STORAGE_KEY = 'hybridTrainerV2';
 const SETTINGS_KEY = 'hybridTrainerSettings';
 
@@ -4658,6 +4685,16 @@ async function editHistorySession(idx) {
   }
   state.editingHistoryIndex = idx;
   state.currentSession = JSON.parse(JSON.stringify(state.history[idx]));
+  // Review-first watch import: being opened IS the review, regardless of
+  // whether anything gets edited or saved. Clear on both copies — the
+  // in-progress currentSession (else an unrelated save would resurrect the
+  // flag it just cleared) and the underlying history entry (so the badge is
+  // gone immediately, without waiting for a save).
+  if (state.currentSession.condData && state.currentSession.condData.reviewPending) {
+    state.currentSession.condData = {};
+    state.history[idx].condData = {};
+    cloudPushSession(state.history[idx]);
+  }
   // backwards-compat: ensure runType exists if this is an old run
   if (state.currentSession.type === 'run' && state.currentSession.runData && !state.currentSession.runData.runType) {
     state.currentSession.runData.runType = 'easy';
@@ -4729,6 +4766,12 @@ function renderHistory() {
     // automated daily sync both write importSource "garmin:<start>".
     const garminTag = (s.importSource || '').indexOf('garmin:') === 0
       ? '<span class="tag garmin">Garmin</span>' : '';
+    // Watch-imported lifts (sync/garmin_sync.py) land review-first: never
+    // silently trusted as normal history until the owner opens it once.
+    // Flag lives in condData (only jsonb free on a 'lifts' session without a
+    // DB migration) and clears in editHistorySession on open.
+    const reviewTag = (s.type === 'lifts' && s.condData && s.condData.reviewPending)
+      ? '<span class="tag review">Imported - review</span>' : '';
     return `
       <div class="session-card ${s.type}" onclick="editHistorySession(${realIdx})">
         <div class="header-row" style="margin-bottom:4px">
@@ -4738,6 +4781,7 @@ function renderHistory() {
             ${condTypeTag}
             ${s.phase ? `<span class="tag">${escapeHtml(s.phase)}</span>` : ''}
             ${garminTag}
+            ${reviewTag}
           </h3>
           <button class="btn-danger" onclick="event.stopPropagation(); deleteHistory(${realIdx})">Delete</button>
         </div>

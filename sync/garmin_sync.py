@@ -50,6 +50,16 @@ try:
 except ImportError:
     create_client = None
 
+# Shared with garmin_push.py, not re-typed: EXERCISE_TAXONOMY is the one table
+# that teaches this repo both directions (app name -> Garmin, and here, Garmin
+# -> app name). A hand-copied second table would be a silent drift risk, same
+# reasoning garmin_pull_corpus.py already uses for importing classify_run_type
+# from this file. garmin_push.py has no module-level network calls and guards
+# its own garminconnect/supabase imports, so this import is safe even without
+# those deps installed.
+from garmin_push import EXERCISE_TAXONOMY, PUSH_NAME_PREFIX
+GARMIN_EXERCISE_TO_APP_NAME = {v: k.title() for k, v in EXERCISE_TAXONOMY.items()}
+
 TOKEN_DIR = os.path.expanduser(os.getenv("GARMIN_TOKEN_DIR", "~/.garminconnect"))
 REQUEST_DELAY_SECONDS = 0.5  # pause between Garmin API calls (be polite)
 FETCH_DAYS = 14              # overlapping window; dedupe makes overlap harmless. Was 3
@@ -116,7 +126,6 @@ CYCLING_TYPES = {
     "cycling", "road_biking", "mountain_biking", "gravel_cycling",
     "virtual_ride", "indoor_cycling", "cyclocross", "track_cycling",
 }
-SKIP_TYPES = {"strength_training"}  # lifts are logged in the app; no duplicates
 
 
 def log(msg):
@@ -362,6 +371,133 @@ def activity_to_row(a, laps, *, unit, easy_hr_ceiling, default_phase,
 
 
 # ---------------------------------------------------------------------------
+# Strength (lifts) mapping — a separate path from activity_to_row above.
+# Exercises come from get_activity_exercise_sets, not the activity summary.
+# Imported sessions are marked review-pending (cond_data.reviewPending)
+# rather than trusted silently — see index.html's History badge and
+# editHistorySession's clear-on-open.
+# ---------------------------------------------------------------------------
+
+GRAMS_PER_LB = 453.59237
+
+
+def grams_to_lb(grams):
+    """Garmin weight is in grams. None or 0 means 'not recorded' (the watch
+    has no weight sensor for e.g. a dumbbell lateral raise), not literally
+    zero pounds, so both map to ''. Rounds to the nearest 0.5 lb: a real gym
+    increment, and it also cleans the few-hundredths-of-a-pound float noise
+    Garmin's own internal round-trip introduces (observed directly on a real
+    account: 20437g read back as 45.055..lb, not exactly 45)."""
+    if grams is None:
+        return ''
+    g = float(grams)
+    if g <= 0:
+        return ''
+    lb = g / GRAMS_PER_LB
+    rounded = round(lb * 2) / 2
+    return str(int(rounded)) if rounded == int(rounded) else f"{rounded:.1f}"
+
+
+def map_garmin_exercise(category, name, notes):
+    """(category, name) -> the app's exact exercise name, via the shared
+    taxonomy. Exact lookup only, no fuzzy matching (same rule as the push
+    direction, garmin_push.py's map_exercise_name). On a miss, falls back to
+    a readable name built from Garmin's own name and appends a line to
+    `notes` — never silently dropped."""
+    hit = GARMIN_EXERCISE_TO_APP_NAME.get((category, name))
+    if hit:
+        return hit
+    fallback = (name or category or 'Unknown exercise').replace('_', ' ').title()
+    notes.append(
+        f"{fallback}: no taxonomy mapping on file (Garmin category={category!r} "
+        f"name={name!r}) — imported under this name. Add it to EXERCISE_TAXONOMY "
+        f"in garmin_push.py once you know the right app-side name.")
+    return fallback
+
+
+def strip_pushed_workout_name(activity_name, target_date_str):
+    """If this activity's name matches garmin_push.py's own deterministic
+    push_workout_name() pattern ('HT: <template> (<date>)'), recover the
+    template name for a far more reviewable session name. Returns '' for a
+    freeform (non-pushed) strength activity — the caller then leaves the
+    session unnamed, same as a hand-logged session with no name."""
+    n = activity_name or ''
+    suffix = f" ({target_date_str})"
+    if n.startswith(PUSH_NAME_PREFIX) and n.endswith(suffix):
+        return n[len(PUSH_NAME_PREFIX):-len(suffix)]
+    return ''
+
+
+def map_strength_activity_to_session(a, exercise_sets, *, user_id, default_phase,
+                                      import_source):
+    """One completed Garmin strength_training activity + its exercise-sets
+    payload -> a 'lifts' session row, exactly like activity_to_row does for
+    run/conditioning but from a different Garmin endpoint (exercise sets, not
+    the activity summary). Returns (row, notes); row is None if there are no
+    active sets to import. Never raises on an unmapped exercise or a missing
+    weight — those degrade to a fallback value and a `notes` line, matching
+    garmin_push.py's 'never silently drop' rule for the push direction.
+    Consecutive ACTIVE sets sharing the same (category, name) group into one
+    exercise; a non-adjacent repeat of the same exercise becomes a SEPARATE
+    exercise entry — same superset handling the Hevy CSV importer already
+    uses, not a special case invented here."""
+    secs = float(a.get("duration") or 0)
+    d, start_t, end_t = local_time_parts(a.get("startTimeLocal"), secs)
+    if not d:
+        return None, ["No usable local start time on this activity."]
+
+    notes = []
+    exercises = []  # list of {"name":..., "key":(cat,name), "sets":[...]}
+    current = None
+    for s in (exercise_sets.get("exerciseSets") or []):
+        if s.get("setType") != "ACTIVE":
+            continue
+        ex_list = s.get("exercises") or []
+        if not ex_list:
+            continue
+        top = ex_list[0]
+        category, g_name = top.get("category") or '', top.get("name") or ''
+        key = (category, g_name)
+        if current is None or current["key"] != key:
+            current = {"name": map_garmin_exercise(category, g_name, notes),
+                       "key": key, "sets": []}
+            exercises.append(current)
+        reps = s.get("repetitionCount")
+        current["sets"].append({
+            "type": "working",
+            "weight": grams_to_lb(s.get("weight")),
+            "reps": str(int(reps)) if reps is not None else '',
+            "rpe": "", "rir": "",
+            "done": True,
+        })
+
+    if not exercises:
+        notes.append("No active sets in this activity's exercise data — nothing to import.")
+        return None, notes
+
+    name = strip_pushed_workout_name(a.get("activityName"), d) or None
+
+    return {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "date": d,
+        "start_time": start_t or None,
+        "end_time": end_t or None,
+        "end_date": None,
+        "bodyweight": None,
+        "name": name,
+        "phase": default_phase or None,
+        "type": "lifts",
+        "exercises": [{"name": e["name"], "sets": e["sets"], "notes": ""} for e in exercises],
+        "run_data": {},
+        "cond_data": {"reviewPending": True},
+        "notes": "",
+        "import_source": import_source,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, notes
+
+
+# ---------------------------------------------------------------------------
 # Network steps
 # ---------------------------------------------------------------------------
 
@@ -422,14 +558,15 @@ def main():
     # localStorage-only by design — that one arrives via EASY_HR_CEILING.)
     settings_row = {}
     try:
-        res = sb.table("user_settings").select("distance_unit,default_phase") \
+        res = sb.table("user_settings").select("distance_unit,default_phase,units") \
             .eq("user_id", user_id).execute()
         if res.data:
             settings_row = res.data[0]
     except Exception as e:
-        log(f"warning: could not read user_settings ({e}); defaulting to mi")
+        log(f"warning: could not read user_settings ({e}); defaulting to mi/lb")
     unit = settings_row.get("distance_unit") or "mi"
     default_phase = settings_row.get("default_phase") or ""
+    units_setting = settings_row.get("units") or "lb"
     easy_hr_ceiling = os.getenv("EASY_HR_CEILING") or ""
 
     # One query for every garmin-sourced row ever written (TCX imports AND
@@ -443,16 +580,26 @@ def main():
         fail(f"Could not read existing sessions for dedupe: {e}", EXIT_DATA)
     log(f"Cloud already has {len(existing)} garmin-sourced sessions")
 
-    inserted, already, skipped_strength = 0, 0, 0
+    # Owner ruling 2026-08-18: the watch is the source of truth for lifts on
+    # watch-guided days — never double-log. Any EXISTING 'lifts' session that
+    # date (hand-logged or already synced) blocks a strength import for that
+    # date, not just an exact import_source match. Same hard-fail philosophy
+    # as the dedupe query above: inserting blind risks the exact duplicate
+    # the owner ruled out.
+    try:
+        res = sb.table("sessions").select("date") \
+            .eq("user_id", user_id).eq("type", "lifts").execute()
+        lifts_dates = {r["date"] for r in (res.data or []) if r.get("date")}
+    except Exception as e:
+        fail(f"Could not read existing lifts sessions for the no-double-log "
+             f"safety check: {e}", EXIT_DATA)
+
+    inserted, already, skipped_existing_lifts = 0, 0, 0
     errors = []
     for a in activities:
         type_key = ((a.get("activityType") or {}).get("typeKey") or "").lower()
         label = f"{(a.get('startTimeLocal') or '?')[:10]} {type_key or '?'}"
 
-        if type_key in SKIP_TYPES:
-            log(f"skip (strength — logged in the app): {label}")
-            skipped_strength += 1
-            continue
         src = garmin_import_source(a)
         if not src:
             log(f"ERROR: no UTC start timestamp, no stable dedupe key: {label}")
@@ -461,6 +608,49 @@ def main():
         if normalize_garmin_source(src) in existing:
             log(f"skip (already in cloud): {label}")
             already += 1
+            continue
+
+        if type_key == "strength_training":
+            if units_setting != "lb":
+                log(f"ERROR: account weight unit is {units_setting!r}, not "
+                    f"'lb' — strength import only has a verified gram->lb "
+                    f"conversion (same precedent as garmin_push.py's weight "
+                    f"push). Not guessing kg: {label}")
+                errors.append(label)
+                continue
+            check_date, _, _ = local_time_parts(a.get("startTimeLocal"), a.get("duration"))
+            if check_date and check_date in lifts_dates:
+                log(f"skip (a 'lifts' session already exists for {check_date} "
+                    f"— not double-logging over it): {label}")
+                skipped_existing_lifts += 1
+                continue
+            try:
+                sets_payload = client.get_activity_exercise_sets(a["activityId"])
+            except Exception as e:
+                log(f"ERROR: exercise-sets fetch failed for {label}: {e}")
+                errors.append(label)
+                continue
+            time.sleep(REQUEST_DELAY_SECONDS)
+            row, notes = map_strength_activity_to_session(
+                a, sets_payload, user_id=user_id, default_phase=default_phase,
+                import_source=src)
+            if row is None:
+                log(f"ERROR: unmappable strength activity: {label}"
+                    + (f" ({notes[0]})" if notes else ""))
+                errors.append(label)
+                continue
+            for n in notes:
+                log(f"  note: {n}")
+            try:
+                sb.table("sessions").insert(row).execute()
+                existing.add(normalize_garmin_source(src))
+                lifts_dates.add(row["date"])
+                inserted += 1
+                log(f"inserted: {label} -> lifts ({len(row['exercises'])} "
+                    f"exercise(s), review-pending)")
+            except Exception as e:
+                log(f"ERROR: insert failed for {label}: {e}")
+                errors.append(label)
             continue
 
         # Laps are only needed for the run classifier (intervals contrast,
@@ -494,7 +684,7 @@ def main():
             errors.append(label)
 
     log(f"Done. inserted={inserted} already_synced={already} "
-        f"skipped_strength={skipped_strength} errors={len(errors)}")
+        f"skipped_existing_lifts={skipped_existing_lifts} errors={len(errors)}")
     if errors:
         # Non-zero exit -> the workflow goes red and uploads the log.
         # The next scheduled run retries the failed ones (dedupe skips the
