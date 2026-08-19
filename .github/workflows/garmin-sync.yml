@@ -1,12 +1,19 @@
 # Daily Garmin -> Hybrid Trainer cloud sync. Setup: sync/SETUP.md.
 #
 # Auth design (do not change casually):
-#   - Garmin: pre-seeded cached tokens ONLY (GARMIN_TOKENS secret). The sync
-#     script has no credential-login code path; if tokens are missing or
-#     expired it fails fast with re-seed instructions. Garmin credentials
-#     must never exist as CI secrets.
-#   - Supabase: signs in as the app user (HT_EMAIL/HT_PASSWORD) with the
+#   - Supabase FIRST: signs in as the app user (HT_EMAIL/HT_PASSWORD) with the
 #     public anon key, so RLS applies normally. Never the service role key.
+#   - Garmin: the SHARED token bundle, read from the `garmin_tokens` row that
+#     sign-in just unlocked, and written back at the end of every run. The
+#     sync script has no credential-login code path; if the bundle is dead it
+#     fails fast and one local `seed_tokens.py --upload` fixes it everywhere.
+#     Garmin credentials must never exist as CI secrets.
+#
+# RETIRED 2026-08-19: the GARMIN_TOKENS secret. It was a frozen snapshot — CI's
+# refreshed tokens died with the runner, so it could only get staler while the
+# owner's local copy drifted the other way. That is the prime suspect for
+# bundles dying in weeks instead of a year. One shared cloud bundle replaces
+# it; delete the secret in repo Settings, nothing reads it now.
 name: Garmin sync
 
 on:
@@ -32,19 +39,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Restore Garmin tokens from secret
-        env:
-          GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
-        run: |
-          if [ -z "$GARMIN_TOKENS" ]; then
-            echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — the GARMIN_TOKENS secret is missing or empty. Re-pack it per sync/SETUP.md 'Fixing a red run'. No Garmin login was attempted."
-            exit 1
-          fi
-          if ! echo "$GARMIN_TOKENS" | base64 -d | tar xzf - -C "$HOME"; then
-            echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — the GARMIN_TOKENS secret did not decode (bad base64 or truncated paste). Re-pack it per sync/SETUP.md 'Fixing a red run'. No Garmin login was attempted."
-            exit 1
-          fi
-          chmod -R go-rwx "$HOME/.garminconnect"
+      # No "restore tokens" step any more: sync/garmin_sync.py fetches the
+      # shared bundle from the garmin_tokens row itself, after Supabase
+      # sign-in, and writes the refreshed bundle back before it exits.
 
       - name: Install dependencies
         run: |
@@ -70,8 +67,9 @@ jobs:
           set -e
           case "$code" in
             0)  exit 0 ;;
-            11) echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — the GARMIN_TOKENS secret was rejected by Garmin. It is a frozen snapshot and cannot self-heal; re-pack it (your LOCAL tokens are usually still fine, so no password login is needed). Steps: sync/SETUP.md 'Fixing a red run'. No credential login was attempted." ;;
-            13) echo "::error title=Garmin sync failed [AUTH-SUPABASE]::FAIL-CLASS: AUTH-SUPABASE — Supabase rejected the sign-in. Check the HT_EMAIL / HT_PASSWORD secrets (app password changed?). Garmin auth succeeded, so tokens are fine." ;;
+            11) echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — token bundle expired: run seed_tokens.py --upload (on your own machine, one command, ~1 minute). The bundle is shared, so that one upload fixes CI and local runs together. No credential login was attempted here." ;;
+            13) echo "::error title=Garmin sync failed [AUTH-SUPABASE]::FAIL-CLASS: AUTH-SUPABASE — Supabase rejected the sign-in. Check the HT_EMAIL / HT_PASSWORD secrets (app password changed?). This now also blocks the Garmin bundle, which lives behind the same sign-in." ;;
+            15) echo "::error title=Garmin sync failed [TOKEN-WRITEBACK]::FAIL-CLASS: TOKEN-WRITEBACK — the sync itself worked, but Garmin rotated the token bundle and it could not be saved back to the garmin_tokens row, so that rotation is lost. Re-run the workflow; if it repeats, run seed_tokens.py --upload." ;;
             12) echo "::error title=Garmin sync failed [GARMIN-API]::FAIL-CLASS: GARMIN-API — logged in fine, but a Garmin API call failed (rate limit or Garmin outage). Usually transient: the next daily run retries and dedupe prevents doubles." ;;
             14) echo "::error title=Garmin sync failed [DATA]::FAIL-CLASS: DATA — auth was fine end to end; one or more activities failed to map or insert. See the uploaded debug log for which dates. The next run retries them." ;;
             10) echo "::error title=Garmin sync failed [CONFIG]::FAIL-CLASS: CONFIG — a required secret or variable is missing, or deps are not importable. See sync/SETUP.md step 3." ;;

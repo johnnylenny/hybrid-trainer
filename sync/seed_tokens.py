@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """
-seed_tokens.py — one-time LOCAL Garmin Connect login to create cached tokens.
+seed_tokens.py — the ONE credential login, done by a human on their own
+machine, and the uploader for the shared Garmin token bundle.
+
+    python3 sync/seed_tokens.py --upload
 
 Run this on your own machine, never in CI. It does the single credential
-login (with MFA prompt if your account uses it) and caches the resulting
-tokens in ~/.garminconnect. Those tokens — not your password — are what the
-GitHub Actions sync uses, packed into the GARMIN_TOKENS secret. Full steps
-in sync/SETUP.md.
+login (with MFA prompt if your account uses it), caches the resulting tokens
+in ~/.garminconnect, and with --upload writes that bundle to the cloud
+`garmin_tokens` row — the ONE bundle the daily CI sync and your local pushes
+both read and both write back to. After --upload there is nothing else to
+update: no secret to re-pack, no second copy to keep in step. Full steps in
+sync/SETUP.md.
 
-Why this split exists: since March 2026 Garmin aggressively rate-limits
+Why the split exists: since March 2026 Garmin aggressively rate-limits
 credential logins per account (429s, multi-day lockouts). One careful login
-here, then roughly a year of token-only access from CI.
+here, then roughly a year of token-only access from CI and local runs alike.
+Why the SHARED bundle exists: two copies of a rotating credential kept
+drifting apart and dying early — the full story is in sync/token_store.py.
 """
 
+import argparse
 import getpass
 import os
 import stat
@@ -29,14 +37,18 @@ try:
 except ImportError:
     sys.exit("Missing dependency. Run:  pip install -r sync/requirements.txt")
 
-TOKEN_DIR = os.path.expanduser("~/.garminconnect")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import token_store  # noqa: E402  (path set above so this works from any cwd)
 
-NEXT_STEPS = """
-Next steps (see sync/SETUP.md for the full walkthrough):
-  1. Pack the tokens for GitHub (copies straight to your clipboard):
-       COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
-  2. GitHub repo -> Settings -> Secrets and variables -> Actions ->
-     New repository secret -> name it GARMIN_TOKENS, paste, save.
+TOKEN_DIR = token_store.TOKEN_DIR
+
+UPLOAD_HINT = """
+Nothing was uploaded. To share these tokens with the daily CI sync, rerun
+with --upload:
+
+    python3 sync/seed_tokens.py --upload
+
+Without that, the cloud bundle keeps whatever it had, and CI keeps using it.
 """
 
 
@@ -53,43 +65,85 @@ def lock_down_token_dir():
             pass
 
 
+def upload(bundle):
+    """Push the freshly-logged-in bundle to the shared cloud row. Signs in to
+    Supabase as the app user, so RLS applies and the row is yours — same
+    account and same anon key the sync uses, never the service key."""
+    try:
+        from supabase import create_client
+    except ImportError:
+        sys.exit("Missing dependency. Run:  pip install -r sync/requirements.txt")
+    for var in ("SUPABASE_URL", "SUPABASE_ANON_KEY"):
+        if not os.getenv(var):
+            sys.exit(f"Missing required env var {var} — see sync/SETUP.md.")
+    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
+    try:
+        auth = token_store.supabase_sign_in(sb, log=print)
+        token_store.upload_bundle(sb, auth.user.id, bundle, log=print)
+    except token_store.TokenStoreError as e:
+        sys.exit(f"FATAL: {e}")
+
+
 def main():
-    # If cached tokens already work, don't burn a credential login.
+    parser = argparse.ArgumentParser(
+        description="One-time local Garmin login, and upload of the shared "
+                    "token bundle.")
+    parser.add_argument(
+        "--upload", action="store_true",
+        help="After logging in (or confirming the cached tokens still work), "
+             "write the bundle to the cloud garmin_tokens row that CI and "
+             "local runs share. This is what makes a re-seed take effect "
+             "everywhere.")
+    args = parser.parse_args()
+
+    # If cached tokens already work, don't burn a credential login. Garmin
+    # rate-limits those hard, and an --upload of still-valid tokens is a
+    # perfectly good repair for a cloud row that got lost or clobbered.
+    bundle = None
     try:
         client = Garmin()
         client.login(TOKEN_DIR)
+        bundle = token_store.read_local_bundle()
         print(f"Cached tokens in {TOKEN_DIR} are already valid — no login needed.")
         print("(To force a fresh login anyway:  rm -rf ~/.garminconnect  and rerun.)")
-        print(NEXT_STEPS)
-        return
     except Exception:
         pass  # no valid tokens; do the one credential login below
 
-    print("One-time Garmin login. Your password is used once and never stored;")
-    print(f"only the resulting tokens are cached in {TOKEN_DIR}.")
-    email = os.getenv("GARMIN_EMAIL") or input("Garmin email: ").strip()
-    password = os.getenv("GARMIN_PASSWORD") or getpass.getpass("Garmin password (hidden): ")
+    if bundle is None:
+        print("One-time Garmin login. Your password is used once and never stored;")
+        print(f"only the resulting tokens are cached in {TOKEN_DIR}.")
+        email = os.getenv("GARMIN_EMAIL") or input("Garmin email: ").strip()
+        password = os.getenv("GARMIN_PASSWORD") or getpass.getpass("Garmin password (hidden): ")
 
-    client = Garmin(
-        email,
-        password,
-        prompt_mfa=lambda: input("MFA code (from email/app): ").strip(),
-    )
-    try:
-        client.login(TOKEN_DIR)
-    except GarminConnectAuthenticationError as e:
-        sys.exit(f"Authentication failed — check email/password. Details: {e}")
-    except GarminConnectTooManyRequestsError:
-        sys.exit(
-            "Garmin rate-limited the login (429). Wait at least an hour and try "
-            "again. Do NOT retry in a loop — that extends the lockout."
+        client = Garmin(
+            email,
+            password,
+            prompt_mfa=lambda: input("MFA code (from email/app): ").strip(),
         )
-    except GarminConnectConnectionError as e:
-        sys.exit(f"Could not reach Garmin. Check your connection. Details: {e}")
+        try:
+            client.login(TOKEN_DIR)
+        except GarminConnectAuthenticationError as e:
+            sys.exit(f"Authentication failed — check email/password. Details: {e}")
+        except GarminConnectTooManyRequestsError:
+            sys.exit(
+                "Garmin rate-limited the login (429). Wait at least an hour and try "
+                "again. Do NOT retry in a loop — that extends the lockout."
+            )
+        except GarminConnectConnectionError as e:
+            sys.exit(f"Could not reach Garmin. Check your connection. Details: {e}")
 
-    lock_down_token_dir()
-    print(f"\nLogged in. Tokens cached in {TOKEN_DIR}.")
-    print(NEXT_STEPS)
+        lock_down_token_dir()
+        print(f"\nLogged in. Tokens cached in {TOKEN_DIR}.")
+        bundle = token_store.read_local_bundle()
+
+    if not bundle:
+        sys.exit(f"Logged in, but no token bundle appeared in {TOKEN_DIR}. "
+                 f"Nothing to upload.")
+
+    if args.upload:
+        upload(bundle)
+    else:
+        print(UPLOAD_HINT)
 
 
 if __name__ == "__main__":

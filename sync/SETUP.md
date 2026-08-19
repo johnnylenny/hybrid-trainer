@@ -21,42 +21,40 @@ cd ~/Claude/Projects/hybrid-trainer
 pip3 install -r sync/requirements.txt
 ```
 
-### 1. Seed Garmin tokens (the only credential login, ever)
+### 1. Seed Garmin tokens and upload them (the only credential login, ever)
 
 Garmin rate-limits password logins hard (429s, multi-day lockouts), so the
 CI workflow never logs in with credentials — it reuses tokens you create
 once, locally:
 
 ```bash
-python3 sync/seed_tokens.py
+python3 sync/seed_tokens.py --upload
 ```
 
-It prompts for your Garmin email, password, and MFA code, then caches
-tokens in `~/.garminconnect`. Your password is used once and never stored.
+It prompts for your Garmin email, password, and MFA code, caches the tokens
+in `~/.garminconnect`, and then uploads that bundle to the cloud
+`garmin_tokens` table. Your password is used once and never stored.
 
-### 2. Pack the tokens into a GitHub secret
+**That upload is the whole point.** The bundle in that row is the *only* copy
+that matters: the daily CI sync reads it, your local pushes read it, and both
+write the refreshed bundle back at the end of every run. There is no second
+copy to keep in step and no secret to re-pack — a re-seed takes effect
+everywhere the moment `--upload` finishes.
 
-```bash
-COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
-```
+`--upload` needs `SUPABASE_URL` and `SUPABASE_ANON_KEY` in your shell (same
+values as step 3 below), because the row is protected by RLS — it signs in as
+you to write it.
 
-That puts a base64 blob on your clipboard (nothing is printed on screen).
-`COPYFILE_DISABLE=1` stops macOS from adding junk `._*` files to the tar.
+> Requires the `garmin_tokens` table: run
+> `_local/migrations/garmin-tokens.sql` in the Supabase SQL editor once.
 
-If you're not on a Mac, drop `pbcopy` and copy the printed output instead:
-
-```bash
-tar czf - -C "$HOME" .garminconnect | base64
-```
-
-### 3. Create the GitHub secrets
+### 2. Create the GitHub secrets
 
 GitHub repo → **Settings → Secrets and variables → Actions** → **New
-repository secret**, five times:
+repository secret**, four times:
 
 | Secret | Value |
 |---|---|
-| `GARMIN_TOKENS` | paste the clipboard from step 2 |
 | `SUPABASE_URL` | `https://rrrfmudypfhywiremudw.supabase.co` (same as in index.html) |
 | `SUPABASE_ANON_KEY` | the anon/public key from index.html (it's public by design — RLS is the protection) |
 | `HT_EMAIL` | the email you sign into Hybrid Trainer with |
@@ -64,7 +62,28 @@ repository secret**, five times:
 
 Never add the Supabase **service role** key, and never add your Garmin
 password. The sync signs in as *you*, so Row Level Security applies exactly
-as it does in the app.
+as it does in the app — and that same sign-in is what unlocks the Garmin
+token row.
+
+There is **no `GARMIN_TOKENS` secret** any more (retired 2026-08-19 — see
+"Why the old secret had to go" below). If you still have one, delete it;
+nothing reads it.
+
+### 3. Local shell setup (for pushes and `--upload`)
+
+The same four values, exported in your shell, let you run `sync/` scripts
+locally:
+
+```bash
+export SUPABASE_URL=https://rrrfmudypfhywiremudw.supabase.co
+export SUPABASE_ANON_KEY=...   # the anon key from index.html
+export HT_EMAIL=...
+export HT_PASSWORD=...
+```
+
+After the first successful run a Supabase session is cached in
+`~/.hybridtrainer_session.json`, so `HT_EMAIL`/`HT_PASSWORD` stop being
+needed on later local runs.
 
 ### 4. (Optional) Tempo detection
 
@@ -96,57 +115,69 @@ these five things broke, so you don't have to dig through the log:
 
 | Class | What broke | What to do |
 |---|---|---|
-| `AUTH-GARMIN` | The `GARMIN_TOKENS` secret was rejected by Garmin | Re-pack the secret — see below. Most common by far. |
-| `AUTH-SUPABASE` | Supabase rejected the sign-in | Your app password changed: update the `HT_PASSWORD` secret. |
+| `AUTH-GARMIN` | Garmin rejected the shared token bundle | Run `python3 sync/seed_tokens.py --upload` locally. One command, fixes CI and local together. |
+| `AUTH-SUPABASE` | Supabase rejected the sign-in | Your app password changed: update the `HT_PASSWORD` secret. This also blocks the Garmin bundle, which lives behind the same sign-in. |
 | `GARMIN-API` | Login worked, a Garmin call failed | Usually transient (rate limit or Garmin outage). Wait for tomorrow's run; dedupe stops doubles. |
+| `TOKEN-WRITEBACK` | The sync worked, but a rotated bundle couldn't be saved back | Re-run the workflow. If it repeats, `seed_tokens.py --upload`. |
 | `DATA` | Auth all fine, some activities didn't map | Download the debug-log artifact on the run page to see which dates. The next run retries them. |
 | `CONFIG` / `INSTALL` | A secret/variable is missing, or `pip install` failed | Re-check the secrets table above; `INSTALL` means the pinned dep couldn't be fetched. |
 
-### Why `AUTH-GARMIN` happens on its own, and why re-packing is the fix
+### Why `AUTH-GARMIN` happens now, and why one command fixes it
 
-**The secret is a frozen snapshot.** `garth` (the auth library) refreshes
-tokens and writes the new ones back to `~/.garminconnect`, so your **local**
-copy heals itself every time you run any `sync/` script. CI restores the same
-snapshot on every run and its refreshed tokens die with the runner. Once the
-snapshot's refresh token stops being accepted, **no future CI run can revive
-it** — it fails identically forever, in about 18 seconds, until you re-pack.
+The bundle is **shared**. Every run — the daily CI sync and every local
+`sync/` script — reads it from the `garmin_tokens` row at the start and
+writes the refreshed bundle back at the end. So a Garmin failure no longer
+means "one copy drifted"; it means the bundle itself is dead, which should
+only happen at the real ~yearly expiry.
 
-Two consequences worth knowing:
-
-- **A local script working proves nothing about CI.** They use different
-  copies of the tokens. (This is exactly what hid the 2026-07-19 → 08-03
-  outage: local Garmin work kept succeeding the whole time.)
-- **Re-pack the secret after any local run of a `sync/` script.** A local run
-  can rotate the refresh token and silently orphan the CI copy.
-
-### Re-packing (about 2 minutes, usually no password needed)
-
-Try this first. Your local tokens are usually still alive even when the CI
-snapshot is dead, and this path involves **no password and no MFA**, so there
-is no rate-limit risk:
+The fix is one command on your own machine:
 
 ```bash
-python3 -c "from garminconnect import Garmin; c=Garmin(); c.login('~/.garminconnect'); print('local tokens OK')"
+python3 sync/seed_tokens.py --upload
 ```
 
-If that printed `local tokens OK`, re-pack them and paste into the secret:
+It first tries your cached tokens (no password, no MFA, no rate-limit risk)
+and only asks for credentials if those are dead too. Either way it ends by
+writing the bundle to the shared row, so CI is fixed at the same moment your
+Mac is. Then **Actions → Garmin sync → Run workflow** to confirm green.
 
-```bash
-COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
+### Why the old secret had to go (retired 2026-08-19)
+
+`GARMIN_TOKENS` was a **frozen snapshot**. `garth` refreshes tokens and writes
+the new ones back to `~/.garminconnect`, so the local copy healed itself on
+every local run — but CI restored the same snapshot every run and its
+refreshed tokens died with the runner. Once the snapshot's refresh token
+stopped being accepted, no future CI run could revive it; it failed
+identically forever until the secret was re-packed by hand. Worse, the two
+copies rotated independently, and a local run could silently orphan the CI
+one.
+
+That is the prime suspect for bundles dying in weeks instead of the
+documented year (`.claude/skills/_owner-runbook.md`, "Garmin token death
+watch"). Both consequences are gone now: there is one copy, and **a local
+run's rotation is exactly what CI reads next**.
+
+### The evidence trail (if bundles still die early)
+
+Every run logs one line with the bundle's age and history — never its
+contents:
+
+```
+Garmin tokens: loaded the shared cloud bundle (seeded 15d ago, last written
+1d ago by ci, 4 rotation(s) since seeding).
 ```
 
-GitHub repo → **Settings → Secrets and variables → Actions** → `GARMIN_TOKENS`
-→ **Update secret** → paste → **Update secret**. Then **Actions → Garmin sync
-→ Run workflow** and confirm it goes green.
+and one at the end saying whether the bundle rotated this run. The row itself
+keeps the same facts; read them any time in the SQL editor:
 
-**Only if the check above also failed** do you need a real re-seed (one
-password login, MFA prompt):
-
-```bash
-rm -rf ~/.garminconnect && python3 sync/seed_tokens.py
+```sql
+select seeded_at, updated_at, updated_by, refresh_count from garmin_tokens;
 ```
 
-then re-pack and paste as above.
+Never `select bundle` onto a shared screen — it is a credential. `seeded_at`
+only moves on a real `--upload`, so `now() - seeded_at` is the bundle's true
+age, and `refresh_count` says how hard it is being rotated. If a bundle dies
+short again, those two numbers are the data the death watch has never had.
 
 ## Pushing a workout to Garmin (outbound, Phase 2)
 
@@ -162,8 +193,11 @@ and has no "Run workflow" button (yet) — you run it from your own terminal
 when you want a workout on the watch. It's a real write to your real Garmin
 account, so it stays a deliberate, manual action.
 
-**One-time setup:** same as above (Python deps installed, tokens seeded).
-The push does NOT need its own token setup.
+**One-time setup:** same as above (Python deps installed, tokens seeded and
+uploaded). The push does NOT need its own token setup — it reads the same
+shared `garmin_tokens` bundle the daily sync reads, and writes the refreshed
+bundle back to it, so a push keeps CI's tokens alive instead of orphaning
+them the way it used to.
 
 **Before running it locally**, export these as real environment variables in
 your terminal (a GitHub secret only exists inside GitHub's servers — running
@@ -230,23 +264,33 @@ and shows up in the report so you know to add it.
 
 ## When tokens expire (~1 year) or the workflow fails with a token error
 
-The failure message in the Actions log says exactly this, but for the
-record:
+The failure message in the Actions log says exactly this, but for the record:
 
 ```bash
-rm -rf ~/.garminconnect
-python3 sync/seed_tokens.py
-COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
+python3 sync/seed_tokens.py --upload
 ```
 
-Then update the `GARMIN_TOKENS` secret with the new clipboard contents
-(Settings → Secrets and variables → Actions → `GARMIN_TOKENS` → Update).
+That is the whole procedure. It reuses your cached tokens if they still work
+and only does a credential login (password + MFA) if they don't, then writes
+the bundle to the shared `garmin_tokens` row that CI and local runs both use.
+Nothing to pack, nothing to paste, no secret to update.
+
+If you want to force a completely fresh login first:
+
+```bash
+rm -rf ~/.garminconnect && python3 sync/seed_tokens.py --upload
+```
 
 ## Good to know
 
-- **The workflow never retries a Garmin login.** Missing/expired tokens =
-  immediate red run with the re-seed instructions above, zero login
-  attempts against your Garmin account.
+- **The workflow never retries a Garmin login.** A missing or expired bundle
+  = immediate red run with the one-command fix above, zero login attempts
+  against your Garmin account.
+- **One bundle, shared.** CI and local runs read the same `garmin_tokens` row
+  and both write the refreshed bundle back. Last write wins, which is fine:
+  the loser just reads a valid bundle on its next run. A local run no longer
+  orphans CI — and unlike before, a local script working *does* now tell you
+  something about CI, because it is the same bundle.
 - **Failure artifact:** a failed run uploads `garmin-sync-debug-log`
   (dates, activity types, insert/skip decisions — no activity names, HR
   data, or secrets). Green runs upload nothing.

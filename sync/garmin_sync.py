@@ -11,9 +11,13 @@ applies normally.
 HARD RULE — tokens only, never a credential login:
   Garmin aggressively rate-limits password logins (429s, multi-day account
   lockouts). This script contains NO credential-login code path at all. It
-  loads pre-seeded cached tokens from ~/.garminconnect and, if they are
-  missing or expired, fails fast with re-seed instructions. Seeding happens
-  locally, once, via sync/seed_tokens.py — see sync/SETUP.md.
+  loads the SHARED token bundle from the cloud `garmin_tokens` row, uses it,
+  and writes the refreshed bundle back at the end of the run — the same
+  bundle local runs use, so the two can no longer drift apart (that drift is
+  what kept killing bundles early; the full story is in sync/token_store.py).
+  If the bundle is missing or expired it fails fast, and the fix is one local
+  command: python3 sync/seed_tokens.py --upload. Seeding is the only
+  credential login, it is local and human-only, and it never happens in CI.
 
 Dedupe: every inserted row carries import_source "garmin:<UTC ISO>", the
 same format the webapp's TCX importer writes, so a run imported manually
@@ -23,7 +27,9 @@ differences (milliseconds, Z suffix) can't cause a duplicate.
 
 Env vars (set as GitHub secrets / vars):
   SUPABASE_URL, SUPABASE_ANON_KEY  — the app's public Supabase config
-  HT_EMAIL, HT_PASSWORD            — the app user's login (RLS stays intact)
+  HT_EMAIL, HT_PASSWORD            — the app user's login (RLS stays intact).
+                                     These now also gate the Garmin bundle:
+                                     it is read from a row this user owns.
   EASY_HR_CEILING (optional)       — bpm; enables tempo-run detection. The
                                      app stores this setting locally only
                                      (not cloud-synced), so CI can't read it
@@ -60,6 +66,10 @@ except ImportError:
 from garmin_push import EXERCISE_TAXONOMY, PUSH_NAME_PREFIX
 GARMIN_EXERCISE_TO_APP_NAME = {v: k.title() for k, v in EXERCISE_TAXONOMY.items()}
 
+# The shared Garmin token bundle + Supabase sign-in. Same standalone-entry-point
+# reasoning as the import above: one implementation, imported, not re-typed.
+import token_store
+
 TOKEN_DIR = os.path.expanduser(os.getenv("GARMIN_TOKEN_DIR", "~/.garminconnect"))
 REQUEST_DELAY_SECONDS = 0.5  # pause between Garmin API calls (be polite)
 FETCH_DAYS = 14              # overlapping window; dedupe makes overlap harmless. Was 3
@@ -78,43 +88,27 @@ EXIT_AUTH_GARMIN = 11    # cached Garmin tokens missing or rejected
 EXIT_GARMIN_API = 12     # logged in, but a Garmin API call failed
 EXIT_AUTH_SUPABASE = 13  # Supabase sign-in rejected
 EXIT_DATA = 14           # per-activity mapping/insert errors
+EXIT_TOKEN_WRITEBACK = 15  # the run rotated the Garmin bundle and could not save it
 FAIL_CLASSES = {
     EXIT_CONFIG: "CONFIG",
     EXIT_AUTH_GARMIN: "AUTH-GARMIN",
     EXIT_GARMIN_API: "GARMIN-API",
     EXIT_AUTH_SUPABASE: "AUTH-SUPABASE",
     EXIT_DATA: "DATA",
+    EXIT_TOKEN_WRITEBACK: "TOKEN-WRITEBACK",
 }
 
-# Why the GARMIN_TOKENS secret goes stale on its own (the 2026-07-19..08-03
-# outage, root-caused 2026-08-03): the secret is a FROZEN SNAPSHOT. garth
-# refreshes tokens and writes the new ones back to ~/.garminconnect, so your
-# LOCAL copy self-heals every time you run any sync/ script. CI restores the
-# same snapshot every run and its refreshed tokens die with the runner, so
-# once the snapshot's refresh token stops being accepted, no future CI run can
-# ever revive it — it fails identically forever. That is why re-packing the
-# secret is the fix, and why a local script run that still works proves
-# nothing about CI.
-RESEED_HELP = """
-How to fix (on your own machine — NEVER add Garmin credentials to CI):
-
-  FIRST TRY (no password, no MFA, no rate-limit risk). Your local tokens are
-  usually still alive even when the CI snapshot is dead:
-    1. python3 -c "from garminconnect import Garmin; c=Garmin(); \\
-         c.login('~/.garminconnect'); print('local tokens OK')"
-    2. If that printed OK, just re-pack them:
-       COPYFILE_DISABLE=1 tar czf - -C "$HOME" .garminconnect | base64 | pbcopy
-    3. Paste the clipboard into the GARMIN_TOKENS secret:
-       GitHub repo -> Settings -> Secrets and variables -> Actions
-    4. Actions -> Garmin sync -> Run workflow, and confirm it goes green.
-
-  ONLY IF step 1 also failed (a real re-seed, one password login):
-    rm -rf ~/.garminconnect && python3 sync/seed_tokens.py
-    then steps 2-4 above.
-
-Re-pack the secret after ANY local run of a sync/ script — a local run can
-rotate the refresh token and silently orphan the CI copy. This script never
-attempts a password login: Garmin rate-limits those hard (429s, lockouts)."""
+# The Garmin token bundle is SHARED, not snapshotted (owner ruling
+# 2026-08-19). It lives in one place — the cloud `garmin_tokens` row — and
+# every run, CI and local alike, loads it at the start and writes the
+# refreshed bundle back at the end. See sync/token_store.py for the full
+# story of the two-diverging-copies bug this replaced, and
+# _local/migrations/garmin-tokens.sql for the table.
+#
+# What that means for a red run: there is no secret to re-pack any more. An
+# AUTH-GARMIN failure now means the bundle itself is genuinely dead, which
+# should be the ~yearly real expiry — one local re-seed fixes it everywhere.
+RESEED_HELP = token_store.RESEED_HELP
 
 # Garmin activityType.typeKey -> Hybrid Trainer mapping
 RUNNING_TYPES = {
@@ -501,35 +495,40 @@ def map_strength_activity_to_session(a, exercise_sets, *, user_id, default_phase
 # Network steps
 # ---------------------------------------------------------------------------
 
+def supabase_login():
+    """Sign in as the app user with the public anon key, so RLS applies
+    exactly as it does in the browser. Never the service role key. This now
+    runs FIRST, before Garmin: the Garmin bundle lives in the cloud, so we
+    need a signed-in client to fetch it."""
+    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
+    try:
+        # allow_saved_session=False: CI has its secrets and a runner has no
+        # saved session to reuse anyway.
+        auth = token_store.supabase_sign_in(sb, log=log, allow_saved_session=False)
+    except token_store.TokenStoreError as e:
+        fail(str(e), EXIT_AUTH_SUPABASE)
+    return sb, auth.user.id
+
+
 def garmin_login():
     """Cached-token login ONLY. There is deliberately no code path here that
-    could submit credentials to Garmin."""
-    if not os.path.isdir(TOKEN_DIR) or not os.listdir(TOKEN_DIR):
-        fail(f"No Garmin tokens found at {TOKEN_DIR}. The GARMIN_TOKENS "
-             f"secret is missing, empty, or didn't decode.{RESEED_HELP}",
-             EXIT_AUTH_GARMIN)
+    could submit credentials to Garmin. The bundle was written to TOKEN_DIR
+    moments ago by token_store.install_bundle(), so a failure here means the
+    SHARED bundle itself is dead — not that some copy drifted."""
     try:
         client = Garmin()  # constructed WITHOUT credentials, on purpose
         client.login(TOKEN_DIR)
-        log("Garmin: logged in with cached tokens.")
+        log("Garmin: logged in with the shared token bundle.")
         return client
     except Exception as e:
-        fail(f"Garmin token login failed — the GARMIN_TOKENS snapshot is "
-             f"expired, rotated away, or corrupt ({type(e).__name__}: {e})."
+        fail(f"Garmin login failed with the shared cloud bundle "
+             f"({type(e).__name__}: {e}) — {token_store.RESEED_LINE}."
              f"{RESEED_HELP}", EXIT_AUTH_GARMIN)
 
 
-def main():
-    if Garmin is None or create_client is None:
-        fail("Missing Python deps. Run: pip install -r sync/requirements.txt",
-             EXIT_CONFIG)
-    for var in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "HT_EMAIL", "HT_PASSWORD"):
-        if not os.getenv(var):
-            fail(f"Missing required env var {var} (set it as a GitHub Actions "
-                 f"secret — see sync/SETUP.md).", EXIT_CONFIG)
-
-    client = garmin_login()
-
+def sync_activities(sb, user_id, client):
+    """The sync itself. Auth (Supabase, then the shared Garmin bundle) has
+    already happened in main() — this only fetches, maps and inserts."""
     end = date.today()
     start = end - timedelta(days=FETCH_DAYS - 1)
     log(f"Fetching Garmin activities {start} .. {end}")
@@ -540,18 +539,6 @@ def main():
              EXIT_GARMIN_API)
     time.sleep(REQUEST_DELAY_SECONDS)
     log(f"Garmin returned {len(activities)} activities")
-
-    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
-    try:
-        auth = sb.auth.sign_in_with_password({
-            "email": os.environ["HT_EMAIL"],
-            "password": os.environ["HT_PASSWORD"],
-        })
-    except Exception as e:
-        fail(f"Supabase sign-in failed: {type(e).__name__}: {e}",
-             EXIT_AUTH_SUPABASE)
-    user_id = auth.user.id
-    log("Supabase: signed in.")
 
     # Units + default phase come from the app's cloud-synced settings so the
     # rows look exactly like ones logged in the app. (easyHrCeiling is
@@ -693,6 +680,46 @@ def main():
         log(f"FAIL-CLASS: {FAIL_CLASSES[EXIT_DATA]}")
         log(f"FATAL: {len(errors)} activities failed to map or insert.")
         sys.exit(EXIT_DATA)
+
+
+def main():
+    if Garmin is None or create_client is None:
+        fail("Missing Python deps. Run: pip install -r sync/requirements.txt",
+             EXIT_CONFIG)
+    for var in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "HT_EMAIL", "HT_PASSWORD"):
+        if not os.getenv(var):
+            fail(f"Missing required env var {var} (set it as a GitHub Actions "
+                 f"secret — see sync/SETUP.md).", EXIT_CONFIG)
+
+    # Order matters now: Supabase first, because the Garmin bundle lives in
+    # the cloud. (Before 2026-08-19 Garmin came first and the bundle came
+    # from the GARMIN_TOKENS secret — see token_store.py for why that had to
+    # go.)
+    sb, user_id = supabase_login()
+    try:
+        state = token_store.install_bundle(sb, user_id, log=log)
+    except token_store.TokenStoreError as e:
+        fail(str(e), EXIT_AUTH_GARMIN)
+
+    actor = "ci" if os.getenv("GITHUB_ACTIONS") == "true" else "local"
+    try:
+        sync_activities(sb, user_id, client=garmin_login())
+    finally:
+        # finally, not just the happy path: garth can rotate the bundle on the
+        # very first call, so a run that dies halfway may still owe the shared
+        # row a newer bundle. sys.exit() raises SystemExit, so fail() above
+        # runs this too.
+        wrote, rotated = token_store.persist_bundle(
+            sb, user_id, state, actor=actor, log=log)
+
+    if not wrote and rotated:
+        # The sync worked, but a rotated bundle never reached the cloud — the
+        # next run would meet a dead token. Loud on purpose: this is exactly
+        # the silent-loss class of bug the shared bundle exists to end.
+        fail("The sync completed, but the rotated Garmin bundle could not be "
+             "written back to the cloud (see the warning above). Re-run the "
+             "workflow; if it keeps failing, re-seed with "
+             f"{token_store.RESEED_LINE}.", EXIT_TOKEN_WRITEBACK)
 
 
 if __name__ == "__main__":

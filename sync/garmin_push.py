@@ -71,7 +71,6 @@ learns this script exists.
 """
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -86,15 +85,16 @@ try:
 except ImportError:
     create_client = None
 
-TOKEN_DIR = os.path.expanduser(os.getenv("GARMIN_TOKEN_DIR", "~/.garminconnect"))
+# The shared Garmin token bundle + the Supabase sign-in helpers (which used to
+# live in this file). Since 2026-08-19 the bundle lives in ONE place — a cloud
+# `garmin_tokens` row — so a local push and the daily CI sync can no longer
+# drift apart. See sync/token_store.py.
+import token_store
+
+TOKEN_DIR = token_store.TOKEN_DIR
 REQUEST_DELAY_SECONDS = 0.5  # pause between Garmin API calls (be polite; spec fence 5)
 
-RESEED_HELP = """
-How to fix (one-time, on your own machine — NEVER add Garmin credentials to CI):
-  1. rm -rf ~/.garminconnect
-  2. python3 sync/seed_tokens.py          # logs in once, prompts for MFA
-Tokens last roughly a year. This script never attempts a password login —
-Garmin rate-limits those hard (429s, multi-day lockouts)."""
+RESEED_HELP = token_store.RESEED_HELP
 
 SELF_TEST_NAME = "HT self-test (safe to delete)"
 
@@ -112,17 +112,18 @@ def garmin_login():
     """Cached-token login ONLY — same pattern as garmin_sync.py's
     garmin_login(), duplicated here (not imported) so each sync/ CLI script
     stays a standalone entry point, same as garmin_sync.py + seed_tokens.py
-    already are."""
-    if not os.path.isdir(TOKEN_DIR) or not os.listdir(TOKEN_DIR):
-        fail(f"No Garmin tokens found at {TOKEN_DIR}.{RESEED_HELP}")
+    already are. The bundle itself is NOT duplicated: token_store.
+    install_bundle() has just written the one shared cloud bundle to
+    TOKEN_DIR, so a failure here means that bundle is genuinely dead."""
     try:
         client = Garmin()  # constructed WITHOUT credentials, on purpose
         client.login(TOKEN_DIR)
-        log("Garmin: logged in with cached tokens.")
+        log("Garmin: logged in with the shared token bundle.")
         return client
     except Exception as e:
-        fail(f"Garmin token login failed — tokens are likely expired or "
-             f"corrupt ({type(e).__name__}: {e}).{RESEED_HELP}")
+        fail(f"Garmin login failed with the shared cloud bundle "
+             f"({type(e).__name__}: {e}) — {token_store.RESEED_LINE}."
+             f"{RESEED_HELP}")
 
 
 def self_test_workout_json():
@@ -643,62 +644,17 @@ def push_workout(client, workout, target_date):
     return workout_id
 
 
-SESSION_PATH = os.path.expanduser(os.getenv("HT_SESSION_PATH", "~/.hybridtrainer_session.json"))
-# Deliberately OUTSIDE the repo — same reasoning as TOKEN_DIR/~/.garminconnect
-# above — so it can never be committed regardless of .gitignore content.
-# Holds only a refresh token, never HT_PASSWORD itself, at file mode 600
-# (owner read/write only).
-
-
-def load_saved_session():
-    if not os.path.isfile(SESSION_PATH):
-        return None
-    try:
-        with open(SESSION_PATH) as f:
-            return (json.load(f) or {}).get("refresh_token") or None
-    except (OSError, ValueError):
-        return None
-
-
-def save_session(session):
-    fd = os.open(SESSION_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump({"refresh_token": session.refresh_token}, f)
-    os.chmod(SESSION_PATH, 0o600)  # belt-and-suspenders: os.open's mode only applies on CREATE
-
-
 def supabase_sign_in(sb):
-    """Sign in to Supabase, preferring a saved session over HT_EMAIL/
-    HT_PASSWORD (spec doesn't require this — added because a human running
-    --push over and over, unlike garmin_sync.py's one-shot-per-CI-run, was
-    retyping a password every single time). Supabase refresh tokens rotate
-    on use, so every successful sign-in (fresh OR refreshed) re-saves the
-    latest one. Unlike Garmin, Supabase sign-in has no harsh rate-limit, so
-    falling back to a fresh password sign-in when the saved session is dead
-    is safe, not risky — it just quietly asks again instead of hard-failing."""
-    refresh_token = load_saved_session()
-    if refresh_token:
-        try:
-            auth = sb.auth.refresh_session(refresh_token)
-            save_session(auth.session)
-            log("Supabase: signed in from a saved session (no password needed).")
-            return auth
-        except Exception as e:
-            log(f"Saved Supabase session expired or invalid ({type(e).__name__}: {e}) "
-                f"— falling back to HT_EMAIL/HT_PASSWORD.")
-
-    email, password = os.getenv("HT_EMAIL"), os.getenv("HT_PASSWORD")
-    if not email or not password:
-        fail("No saved Supabase session yet, and HT_EMAIL/HT_PASSWORD aren't set. "
-             "Set them once (see sync/SETUP.md) — after that run, a session is "
-             "saved and you won't need to set them again.")
+    """Sign in as the app user (RLS intact — never the service key). The
+    implementation moved to token_store.supabase_sign_in() when the sync, the
+    push and the seeder all needed the same one; this wrapper keeps this
+    script's fail() classification. It still prefers a saved session over
+    HT_EMAIL/HT_PASSWORD, because a human running --push over and over should
+    not retype a password."""
     try:
-        auth = sb.auth.sign_in_with_password({"email": email, "password": password})
-    except Exception as e:
-        fail(f"Supabase sign-in failed: {type(e).__name__}: {e}")
-    save_session(auth.session)
-    log("Supabase: signed in with HT_EMAIL/HT_PASSWORD, saved a session for next time.")
-    return auth
+        return token_store.supabase_sign_in(sb, log=log)
+    except token_store.TokenStoreError as e:
+        fail(str(e))
 
 
 def fetch_template(sb, user_id, template_name):
@@ -726,26 +682,11 @@ def fetch_lifts_history(sb, user_id):
     return sort_sessions_like_app(res.data or [])
 
 
-def push(client, template_name, target_date):
-    """Phase 2 entry point. Connects to Supabase with the SAME account
-    garmin_sync.py uses (RLS intact — never the service key), reads one
-    named template plus lifts history, maps it, and pushes it via
-    push_workout(). Auth prefers a saved session over HT_EMAIL/HT_PASSWORD —
-    see supabase_sign_in()."""
-    for var in ("SUPABASE_URL", "SUPABASE_ANON_KEY"):
-        if not os.getenv(var):
-            fail(f"Missing required env var {var} — see sync/SETUP.md.")
-    if create_client is None:
-        fail("Missing Python deps. Run: pip install -r sync/requirements.txt")
-    try:
-        datetime.strptime(target_date, "%Y-%m-%d")
-    except ValueError:
-        fail(f"--date must be YYYY-MM-DD, got {target_date!r}.")
-
-    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
-    auth = supabase_sign_in(sb)
-    user_id = auth.user.id
-
+def push(client, sb, user_id, template_name, target_date):
+    """Phase 2 entry point. Reads one named template plus lifts history from
+    Supabase (already signed in by main(), as the SAME account garmin_sync.py
+    uses — RLS intact, never the service key), maps it, and pushes it via
+    push_workout()."""
     template = fetch_template(sb, user_id, template_name)
     history = fetch_lifts_history(sb, user_id)
     log(f"Template {template['name']!r}: {len(template.get('exercises') or [])} "
@@ -812,12 +753,49 @@ def main():
             "NAME --date YYYY-MM-DD (Phase 2: push a real workout).")
     if args.push and not (args.template and args.date):
         parser.error("--push requires both --template and --date.")
+    if args.push:
+        try:
+            datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            fail(f"--date must be YYYY-MM-DD, got {args.date!r}.")
 
-    client = garmin_login()
-    if args.self_test:
-        self_test(client)
-    else:
-        push(client, args.template, args.date)
+    # Supabase first, for BOTH modes: the Garmin token bundle lives in a cloud
+    # row now, so even --self-test (which only talks to Garmin) needs the
+    # signed-in client to fetch it. That is the price of one shared bundle,
+    # and it is the point — see token_store.py.
+    if create_client is None:
+        fail("Missing Python deps. Run: pip install -r sync/requirements.txt")
+    for var in ("SUPABASE_URL", "SUPABASE_ANON_KEY"):
+        if not os.getenv(var):
+            fail(f"Missing required env var {var} — see sync/SETUP.md.")
+    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
+    user_id = supabase_sign_in(sb).user.id
+    try:
+        state = token_store.install_bundle(sb, user_id, log=log)
+    except token_store.TokenStoreError as e:
+        fail(str(e))
+
+    try:
+        client = garmin_login()
+        if args.self_test:
+            self_test(client)
+        else:
+            push(client, sb, user_id, args.template, args.date)
+    finally:
+        # Every run writes back, local included — that is the whole fix. In a
+        # finally block because a push that dies halfway can still have
+        # rotated the bundle, and losing that rotation is what used to kill
+        # the CI copy. fail() raises SystemExit, so this runs on failures too.
+        wrote, rotated = token_store.persist_bundle(
+            sb, user_id, state,
+            actor="ci" if os.getenv("GITHUB_ACTIONS") == "true" else "local",
+            log=log)
+
+    if not wrote and rotated:
+        fail("The push finished, but the rotated Garmin bundle could not be "
+             "written back to the cloud (see the warning above). Re-run this "
+             "command; if it keeps failing, re-seed with "
+             f"{token_store.RESEED_LINE}.")
 
 
 if __name__ == "__main__":
