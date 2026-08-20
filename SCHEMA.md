@@ -448,7 +448,10 @@ One row per user. Primary key is `user_id` (not a separate id), so there's at mo
 | `default_phase` | text | `defaultPhase` |
 | `display_name` | text | `displayName` (added in v9) |
 | `avatar` | text | `avatar` (added in v9) |
+| `lift_queue` | jsonb | not yet wired to the app (added 2026-08-19, sync-side only) |
 | `updated_at` | timestamptz | — |
+
+`lift_queue` (migration `_local/migrations/lift-queue.sql`, sync/nightly_cycle.py): `{"templateIds": ["<uuid>", ...], "headIndex": <int>}`, an ordered rotation of lifts-template ids with a head pointer. Default `{"templateIds":[],"headIndex":0}`. Read, advanced, and written only by `sync/nightly_cycle.py` today — the app-side "Next up" strip (reorder, tap-to-set-head) is a follow-up session's UI work, not yet built, so this field is **not** in `settingsToRow`/`rowToSettings` yet. Not tied to `SCHEMA_VERSION` (a settings field, not a session/template shape change — same carve-out `easyHrCeiling` used).
 
 ### `feedback` table (app v0.26.0)
 

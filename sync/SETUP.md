@@ -1,16 +1,25 @@
 # Garmin auto-sync — setup
 
-A GitHub Actions workflow (`.github/workflows/garmin-sync.yml`) runs daily at
-09:00 UTC and inserts your last 14 days of Garmin activities into the app's
-cloud `sessions` table (the window overlaps on purpose; dedupe makes that
-harmless, and it lets an outage self-heal on the first green run). After the one-time setup below there are zero manual
-steps — new activities just appear in the app (a fresh open pulls everything
-from the cloud; on a phone, returning to a backgrounded app usually triggers
-a fresh open too).
+A GitHub Actions workflow (`.github/workflows/garmin-sync.yml`) runs
+`sync/nightly_cycle.py` daily at 09:00 UTC. Four stages, each isolated so
+one failing doesn't stop the others: **import** (inserts your last 14 days
+of Garmin activities into the app's cloud `sessions` table — the window
+overlaps on purpose; dedupe makes that harmless, and it lets an outage
+self-heal on the first green run), **advance** (moves your lift-day queue's
+pointer if a completed watch workout matches the queue head's template),
+**push** (uploads the now-current queue head to Garmin Connect for today),
+**cleanup** (deletes this script's own past pushes so nothing builds up on
+the watch). After the one-time setup below there are zero manual steps —
+new activities just appear in the app, and tomorrow's lift day is already on
+your watch by the time you get to the gym. Full stage design:
+`sync/nightly_cycle.py`'s module docstring; the queue itself:
+`_local/migrations/lift-queue.sql`.
 
-What syncs: runs (auto-typed easy/tempo/intervals/long), rowing (erg),
-cycling and other cardio (conditioning). Strength activities are skipped —
-you log lifts in the app. No health metrics (sleep, HRV, etc.).
+What syncs on the import side: runs (auto-typed easy/tempo/intervals/long),
+rowing (erg), cycling and other cardio (conditioning), AND completed
+strength (lifts) sessions (shipped v0.58.0 — the "Strength activities are
+skipped" line that used to be here is stale). No health metrics (sleep,
+HRV, etc.).
 
 ## One-time setup
 
@@ -96,30 +105,36 @@ classify as easy — same as the app with the setting blank.
 
 ## Running it
 
-- **Manual run:** repo → **Actions** → **Garmin sync** → **Run workflow**.
+- **Manual run:** repo → **Actions** → **Garmin sync** → **Run workflow**
+  (runs the full 4-stage cycle, not just import).
 - **Scheduled:** daily at 09:00 UTC automatically.
 - **Verify:** the run is green; open the app (hard refresh on desktop:
-  Cmd+Shift+R), History shows the new sessions with a "Garmin" badge.
-  Run it again immediately: still green, log says `inserted=0`.
+  Cmd+Shift+R), History shows the new sessions with a "Garmin" badge; Garmin
+  Connect shows today's workout scheduled. Run it again immediately: still
+  green, import log says `inserted=0` and push/cleanup are idempotent
+  (re-push replaces its own prior push for the same day, cleanup finds
+  nothing new to delete).
 
-The run log shows one line per activity: inserted, skipped (already in
-cloud), or skipped (strength). Anything already imported via the manual
-TCX importer is recognized and skipped too — same `garmin:<timestamp>`
-dedupe key.
+The run log shows one line per activity for import (inserted, skipped —
+already in cloud, or skipped — a lifts session already exists that date),
+then one `STAGE-IMPORT`/`STAGE-ADVANCE`/`STAGE-PUSH`/`STAGE-CLEANUP` summary
+line each. Anything already imported via the manual TCX importer is
+recognized and skipped too — same `garmin:<timestamp>` dedupe key.
 
 ## Fixing a red run
 
 Every failure prints ONE line naming the failure class, at the top of the run
 page (Actions → the red run). Read that line first — it tells you which of
-these five things broke, so you don't have to dig through the log:
+these things broke, so you don't have to dig through the log:
 
 | Class | What broke | What to do |
 |---|---|---|
 | `AUTH-GARMIN` | Garmin rejected the shared token bundle | Run `python3 sync/seed_tokens.py --upload` locally. One command, fixes CI and local together. |
 | `AUTH-SUPABASE` | Supabase rejected the sign-in | Your app password changed: update the `HT_PASSWORD` secret. This also blocks the Garmin bundle, which lives behind the same sign-in. |
 | `GARMIN-API` | Login worked, a Garmin call failed | Usually transient (rate limit or Garmin outage). Wait for tomorrow's run; dedupe stops doubles. |
-| `TOKEN-WRITEBACK` | The sync worked, but a rotated bundle couldn't be saved back | Re-run the workflow. If it repeats, `seed_tokens.py --upload`. |
-| `DATA` | Auth all fine, some activities didn't map | Download the debug-log artifact on the run page to see which dates. The next run retries them. |
+| `TOKEN-WRITEBACK` | The cycle worked, but a rotated bundle couldn't be saved back | Re-run the workflow. If it repeats, `seed_tokens.py --upload`. |
+| `DATA` | Auth all fine, some activities didn't map during import | Download the debug-log artifact on the run page to see which dates. The next run retries them. |
+| `STAGE-FAILURE` | One or more of import/advance/push/cleanup failed while the others still ran | Download the debug-log artifact; read the `STAGE-*` lines to see which stage and why — each names its own original failure detail. |
 | `CONFIG` / `INSTALL` | A secret/variable is missing, or `pip install` failed | Re-check the secrets table above; `INSTALL` means the pinned dep couldn't be fetched. |
 
 ### Why `AUTH-GARMIN` happens now, and why one command fixes it
@@ -179,7 +194,7 @@ only moves on a real `--upload`, so `now() - seeded_at` is the bundle's true
 age, and `refresh_count` says how hard it is being rotated. If a bundle dies
 short again, those two numbers are the data the death watch has never had.
 
-## Pushing a workout to Garmin (outbound, Phase 2)
+## Pushing a workout to Garmin (outbound, Phase 2 + nightly automation)
 
 The sync above only reads FROM Garmin. `sync/garmin_push.py` writes TO it:
 pick one of your saved lifts templates, and it fills in your most recent
@@ -188,10 +203,19 @@ you load a template), uploads it as a structured strength workout, and
 schedules it to a date — so it shows up on your Forerunner 965 and guides
 you through the lift at the gym. Full design: `outputs/Garmin_Outbound_Spec.md`.
 
-**Local only, on purpose.** Unlike the daily sync, this is never scheduled
-and has no "Run workflow" button (yet) — you run it from your own terminal
-when you want a workout on the watch. It's a real write to your real Garmin
-account, so it stays a deliberate, manual action.
+**As of 2026-08-19 this runs automatically, nightly, as the PUSH stage of
+`sync/nightly_cycle.py`** (see the top of this file and
+`.claude/skills/_owner-runbook.md`'s "My training cycle") — it pushes
+whatever your lift-day queue's current head is, for today, so you don't
+trigger it by hand anymore for the normal case. This amends the spec's
+original "manual-trigger only, never scheduled" fence (§1.3/fence 5): that
+was the right call before a month of proven real gym use existed, and the
+owner's 2026-08-19 ruling is the "new decision" the fence asked for before
+it could change.
+
+**The commands below still work, unchanged, for a manual override** — push
+something OFF the queue, or force tonight's push again without waiting. It's
+still a real write to your real Garmin account either way.
 
 **One-time setup:** same as above (Python deps installed, tokens seeded and
 uploaded). The push does NOT need its own token setup — it reads the same

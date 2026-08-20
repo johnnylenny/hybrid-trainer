@@ -135,13 +135,25 @@ def log(msg):
         pass
 
 
+class SyncFailure(Exception):
+    """Raised by fail() instead of exiting, so the pieces of this module can
+    be called as an isolated stage from an orchestrator (sync/nightly_cycle.py)
+    that must not let one failure kill the whole process. Carries the same
+    FAIL_CLASSES code fail() always logged, so main() below can reproduce
+    today's exact sys.exit(code) for standalone `python sync/garmin_sync.py`
+    runs."""
+    def __init__(self, msg, code):
+        super().__init__(msg)
+        self.code = code
+
+
 def fail(msg, code=EXIT_CONFIG):
-    """Log the failure CLASS on its own first line, then the detail, then exit
-    with that class's code. The class line is what the workflow echoes as a
+    """Log the failure CLASS on its own first line, then the detail, then
+    raise SyncFailure(code). The class line is what the workflow echoes as a
     one-line annotation, so keep it short and free of anything sensitive."""
     log(f"FAIL-CLASS: {FAIL_CLASSES.get(code, 'UNKNOWN')}")
     log("FATAL: " + str(msg))
-    sys.exit(code)
+    raise SyncFailure(msg, code)
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +595,10 @@ def sync_activities(sb, user_id, client):
 
     inserted, already, skipped_existing_lifts = 0, 0, 0
     errors = []
+    new_lifts = []  # {date, name} for each NEW lifts session inserted this
+                     # run — name is the recovered template name (or None
+                     # for an unrecognized/hand-done activity), consumed by
+                     # sync/nightly_cycle.py's advance stage.
     for a in activities:
         type_key = ((a.get("activityType") or {}).get("typeKey") or "").lower()
         label = f"{(a.get('startTimeLocal') or '?')[:10]} {type_key or '?'}"
@@ -633,6 +649,7 @@ def sync_activities(sb, user_id, client):
                 existing.add(normalize_garmin_source(src))
                 lifts_dates.add(row["date"])
                 inserted += 1
+                new_lifts.append({"date": row["date"], "name": row["name"]})
                 log(f"inserted: {label} -> lifts ({len(row['exercises'])} "
                     f"exercise(s), review-pending)")
             except Exception as e:
@@ -672,17 +689,41 @@ def sync_activities(sb, user_id, client):
 
     log(f"Done. inserted={inserted} already_synced={already} "
         f"skipped_existing_lifts={skipped_existing_lifts} errors={len(errors)}")
-    if errors:
-        # Non-zero exit -> the workflow goes red and uploads the log.
-        # The next scheduled run retries the failed ones (dedupe skips the
-        # rest), so a transient failure self-heals. Class DATA, not AUTH:
-        # everything authenticated fine, some activities just didn't map.
-        log(f"FAIL-CLASS: {FAIL_CLASSES[EXIT_DATA]}")
-        log(f"FATAL: {len(errors)} activities failed to map or insert.")
-        sys.exit(EXIT_DATA)
+    # Does NOT fail()/raise here even when errors is non-empty: a partial
+    # success (some activities inserted fine, an unrelated one didn't map)
+    # must still be usable by a caller that needs whatever DID succeed —
+    # sync/nightly_cycle.py's advance stage needs new_lifts regardless of
+    # whether an unrelated activity in the same batch errored. The decision
+    # of whether a non-empty errors list should be a hard failure belongs to
+    # the caller: _run() below still fails loud for the standalone CLI
+    # (unchanged behavior), nightly_cycle.py's stage_import reports its own
+    # STAGE-IMPORT: FAIL while still handing the partial results onward.
+
+    # new_lifts is sorted oldest-first before returning: get_activities_by_date
+    # returns newest-first (confirmed against the installed garminconnect
+    # source — no sortorder is passed, and only that call auto-paginates;
+    # order is not otherwise guaranteed), and a multi-day catch-up must be
+    # walked in the order it actually happened at the gym.
+    return {
+        "inserted": inserted, "already": already,
+        "skipped_existing_lifts": skipped_existing_lifts, "errors": errors,
+        "new_lifts": sorted(new_lifts, key=lambda x: x["date"]),
+    }
 
 
 def main():
+    # Thin wrapper: _run() raises SyncFailure on any fail() call (needed so
+    # sync/nightly_cycle.py can import and call the pieces below as an
+    # isolated stage without the process exiting on it). This converts that
+    # back to the exact sys.exit(code) standalone `python sync/garmin_sync.py`
+    # always did.
+    try:
+        _run()
+    except SyncFailure as e:
+        sys.exit(e.code)
+
+
+def _run():
     if Garmin is None or create_client is None:
         fail("Missing Python deps. Run: pip install -r sync/requirements.txt",
              EXIT_CONFIG)
@@ -702,15 +743,24 @@ def main():
         fail(str(e), EXIT_AUTH_GARMIN)
 
     actor = "ci" if os.getenv("GITHUB_ACTIONS") == "true" else "local"
+    result = None
     try:
-        sync_activities(sb, user_id, client=garmin_login())
+        result = sync_activities(sb, user_id, client=garmin_login())
     finally:
         # finally, not just the happy path: garth can rotate the bundle on the
         # very first call, so a run that dies halfway may still owe the shared
-        # row a newer bundle. sys.exit() raises SystemExit, so fail() above
-        # runs this too.
+        # row a newer bundle. A raised SyncFailure still runs this — it
+        # unwinds through finally exactly like the old sys.exit() did.
         wrote, rotated = token_store.persist_bundle(
             sb, user_id, state, actor=actor, log=log)
+
+    # sync_activities() no longer fails loud on a non-empty errors list
+    # itself (sync/nightly_cycle.py's import stage needs the partial result
+    # even when some activities errored) — so the standalone CLI's own
+    # "fail loud on any mapping/insert error" behavior is preserved here.
+    if result and result["errors"]:
+        fail(f"{len(result['errors'])} activities failed to map or insert.",
+             EXIT_DATA)
 
     if not wrote and rotated:
         # The sync worked, but a rotated bundle never reached the cloud — the

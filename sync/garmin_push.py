@@ -13,10 +13,19 @@ HARD RULE — tokens only, never a credential login (same as garmin_sync.py):
   missing or expired, fails fast with re-seed instructions. Seeding happens
   locally, once, via sync/seed_tokens.py — see sync/SETUP.md.
 
-Trigger: local only, manually. Never scheduled — a cron that writes to
-Garmin unattended is risk without benefit (spec 1.3 / fence 5). Phase 2's
-workflow_dispatch button is a deliberate follow-up release, gated on a week
-of real local use (spec 1.6) — not built here.
+Trigger: local CLI (--push / --self-test, unchanged) OR sync/nightly_cycle.py,
+which calls the functions in this file as one stage of the scheduled nightly
+workflow. Fence 5 of outputs/Garmin_Outbound_Spec.md ("no scheduled writes,
+ever, without a new decision") and spec 1.3's "never scheduled" are AMENDED by
+owner ruling 2026-08-19: push the queue head nightly so the watch has maximum
+background-sync time before the gym. That ruling is the "new decision" fence
+5 asked for — it was made after Phase 2 had a month of real local/gym use
+(first live push 2026-07-21, CHEST; second 2026-07-31, BACK), well past the
+week-long gate spec 1.6 originally asked for. See outputs/Garmin_Outbound_Spec.md's
+fence-5 amendment note and .claude/skills/_owner-runbook.md's training-cycle
+section for the full story. This file's own mapping/push logic is unchanged
+either way — only who calls it, and how a hard failure propagates (see
+PushFailure below), changed.
 
 Two modes:
 
@@ -72,6 +81,7 @@ learns this script exists.
 
 import argparse
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -103,9 +113,17 @@ def log(msg):
     print(str(msg), flush=True)
 
 
+class PushFailure(Exception):
+    """Raised by fail() instead of exiting, so sync/nightly_cycle.py can call
+    push()/push_workout()/cleanup_stale_pushes()/etc. as an isolated stage
+    that must not kill the whole process. main() below converts it back to
+    sys.exit(1) so standalone `--push`/`--self-test` behave exactly as
+    before."""
+
+
 def fail(msg):
     log("FATAL: " + str(msg))
-    sys.exit(1)
+    raise PushFailure(msg)
 
 
 def garmin_login():
@@ -644,6 +662,78 @@ def push_workout(client, workout, target_date):
     return workout_id
 
 
+# ---------------------------------------------------------------------------
+# AUTO-CLEANUP (owner ruling 2026-08-19(b)) — delete this script's own past
+# pushes so nothing builds up on the watch. Structurally scoped: only a name
+# matching push_workout_name()'s exact deterministic format is ever touched,
+# so a hand-built workout (or SELF_TEST_NAME, which has no "(YYYY-MM-DD)"
+# suffix) cannot match and is never at risk.
+# ---------------------------------------------------------------------------
+
+PUSHED_WORKOUT_RE = re.compile(
+    r"^" + re.escape(PUSH_NAME_PREFIX) + r"(.+) \((\d{4}-\d{2}-\d{2})\)$")
+
+
+def list_own_pushed_workouts(client):
+    """Every workout whose name matches push_workout_name()'s exact format,
+    across the WHOLE account, paginated. get_workouts(start, limit) does NOT
+    auto-paginate on its own (confirmed against the installed garminconnect
+    source — unlike get_activities_by_date, which loops internally), so a
+    single-page call here would silently miss anything past the first page
+    and defeat the point of cleanup (a month of manual test pushes plus
+    hand-built workouts can plausibly exceed 100 total). Returns a list of
+    {"workout_id", "template_name", "date_str"} — one per match, any date."""
+    out = []
+    start = 0
+    page_size = 100
+    while True:
+        try:
+            page = client.get_workouts(start=start, limit=page_size)
+        except Exception as e:
+            raise PushFailure(
+                f"get_workouts failed while listing pushed workouts "
+                f"(start={start}): {type(e).__name__}: {e}")
+        if not page:
+            break
+        for w in page:
+            m = PUSHED_WORKOUT_RE.match(w.get("workoutName") or "")
+            if m:
+                out.append({"workout_id": w.get("workoutId"),
+                            "template_name": m.group(1), "date_str": m.group(2)})
+        if len(page) < page_size:
+            break
+        start += page_size
+        time.sleep(REQUEST_DELAY_SECONDS)
+    return out
+
+
+def cleanup_stale_pushes(client, today_str):
+    """Delete every one of this script's own pushed workouts dated strictly
+    before today_str — never today's or a future date, never anything that
+    isn't an exact deterministic-name match. Best-effort: one delete failing
+    does not stop the rest (an unattended overnight job should clean up as
+    much as it safely can, not abort on the first bad id). Returns
+    {"deleted": [...], "failed": [...], "kept": N} — "kept" counts own-named
+    matches that were NOT stale (today/future), for the run report; the
+    caller decides whether any `failed` entries should mark the stage FAIL."""
+    workouts = list_own_pushed_workouts(client)
+    stale = [w for w in workouts if w["date_str"] < today_str]
+    kept = len(workouts) - len(stale)
+    deleted, failed = [], []
+    for w in stale:
+        try:
+            client.delete_workout(w["workout_id"])
+            deleted.append(w)
+            log(f"cleanup: deleted {w['template_name']!r} ({w['date_str']}, "
+                f"id={w['workout_id']})")
+        except Exception as e:
+            failed.append({**w, "error": f"{type(e).__name__}: {e}"})
+            log(f"cleanup: ERROR deleting {w['template_name']!r} "
+                f"({w['date_str']}, id={w['workout_id']}): {e}")
+        time.sleep(REQUEST_DELAY_SECONDS)
+    return {"deleted": deleted, "failed": failed, "kept": kept}
+
+
 def supabase_sign_in(sb):
     """Sign in as the app user (RLS intact — never the service key). The
     implementation moved to token_store.supabase_sign_in() when the sync, the
@@ -671,6 +761,24 @@ def fetch_template(sb, user_id, template_name):
         fail(f"{len(rows)} 'lifts' templates are named {template_name!r} — rename one "
              f"in the app so the name is unique, then retry.")
     return rows[0]
+
+
+def fetch_template_by_id(sb, user_id, template_id):
+    """Queue-driven lookup (sync/nightly_cycle.py) — the lift_queue setting
+    stores template ids, not names, matching the app's own UUID convention.
+    Returns the row, or None on EITHER a miss or a query error: a queue entry
+    pointing at a template that's since been deleted from the app, or a
+    transient read failure, must degrade to a graceful skip overnight —
+    never a hard fail() — since nothing here is attended."""
+    try:
+        res = sb.table("templates").select("id,name,type,exercises") \
+            .eq("user_id", user_id).eq("id", template_id).eq("type", "lifts").execute()
+    except Exception as e:
+        log(f"warning: template lookup by id={template_id} failed "
+            f"({type(e).__name__}: {e})")
+        return None
+    rows = res.data or []
+    return rows[0] if rows else None
 
 
 def fetch_lifts_history(sb, user_id):
@@ -723,6 +831,17 @@ def push(client, sb, user_id, template_name, target_date):
 
 
 def main():
+    # Thin wrapper: _run() raises PushFailure on any fail() call (needed so
+    # sync/nightly_cycle.py can call this file's pieces as an isolated stage
+    # without the process exiting on it). This converts that back to the
+    # exact sys.exit(1) standalone --push/--self-test always did.
+    try:
+        _run()
+    except PushFailure:
+        sys.exit(1)
+
+
+def _run():
     if Garmin is None:
         fail("Missing Python deps. Run: pip install -r sync/requirements.txt")
 
@@ -785,7 +904,8 @@ def main():
         # Every run writes back, local included — that is the whole fix. In a
         # finally block because a push that dies halfway can still have
         # rotated the bundle, and losing that rotation is what used to kill
-        # the CI copy. fail() raises SystemExit, so this runs on failures too.
+        # the CI copy. A raised PushFailure still runs this too (it unwinds
+        # through finally exactly like the old sys.exit() did).
         wrote, rotated = token_store.persist_bundle(
             sb, user_id, state,
             actor="ci" if os.getenv("GITHUB_ACTIONS") == "true" else "local",

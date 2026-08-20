@@ -1,12 +1,24 @@
-# Daily Garmin -> Hybrid Trainer cloud sync. Setup: sync/SETUP.md.
+# Nightly Hybrid Trainer <-> Garmin training-cycle sync. Setup: sync/SETUP.md.
+# Runs sync/nightly_cycle.py: import watch lifts, auto-advance the lift
+# queue on a match, auto-push tonight's queue head, auto-delete this
+# script's own stale past pushes — each stage isolated from the others'
+# failures (owner ruling 2026-08-19, "close the training cycle"). Entry point
+# changed from sync/garmin_sync.py (import-only) to sync/nightly_cycle.py the
+# same day; see that file's module docstring for the full stage design.
+#
+# This also amends outputs/Garmin_Outbound_Spec.md's fence 5 and
+# sync/garmin_push.py's own docstring, which both said writes to Garmin were
+# manual-trigger only, never scheduled — the 2026-08-19 owner ruling is the
+# "new decision" fence 5 asked for before that could change. Push runs are
+# still one workout/night, low-volume, and fail loud per stage.
 #
 # Auth design (do not change casually):
 #   - Supabase FIRST: signs in as the app user (HT_EMAIL/HT_PASSWORD) with the
 #     public anon key, so RLS applies normally. Never the service role key.
 #   - Garmin: the SHARED token bundle, read from the `garmin_tokens` row that
-#     sign-in just unlocked, and written back at the end of every run. The
-#     sync script has no credential-login code path; if the bundle is dead it
-#     fails fast and one local `seed_tokens.py --upload` fixes it everywhere.
+#     sign-in just unlocked, and written back at the end of every run. Neither
+#     script has a credential-login code path; if the bundle is dead it fails
+#     fast and one local `seed_tokens.py --upload` fixes it everywhere.
 #     Garmin credentials must never exist as CI secrets.
 #
 # RETIRED 2026-08-19: the GARMIN_TOKENS secret. It was a frozen snapshot — CI's
@@ -39,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # No "restore tokens" step any more: sync/garmin_sync.py fetches the
+      # No "restore tokens" step any more: sync/nightly_cycle.py fetches the
       # shared bundle from the garmin_tokens row itself, after Supabase
       # sign-in, and writes the refreshed bundle back before it exits.
 
@@ -51,9 +63,14 @@ jobs:
           fi
 
       # Exit codes are the failure CLASS, defined in sync/garmin_sync.py
-      # (EXIT_CONFIG=10 ... EXIT_DATA=14). Each maps to ONE redacted line so a
-      # failure is diagnosable from the run page without opening the log.
-      - name: Run sync
+      # (EXIT_CONFIG=10 ... EXIT_TOKEN_WRITEBACK=15) plus one new one from
+      # sync/nightly_cycle.py (EXIT_STAGE_FAILURE=16, one or more of the
+      # import/advance/push/cleanup stages failed — each stage still logs
+      # its OWN "STAGE-<NAME>: FAIL (...)" line naming which and why, so 16
+      # means "check those lines," not "unknown"). Each code maps to ONE
+      # redacted line so a failure is diagnosable from the run page without
+      # opening the log.
+      - name: Run nightly cycle
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -62,18 +79,19 @@ jobs:
           EASY_HR_CEILING: ${{ vars.EASY_HR_CEILING }}
         run: |
           set +e
-          python sync/garmin_sync.py
+          python sync/nightly_cycle.py
           code=$?
           set -e
           case "$code" in
             0)  exit 0 ;;
             11) echo "::error title=Garmin sync failed [AUTH-GARMIN]::FAIL-CLASS: AUTH-GARMIN — token bundle expired: run seed_tokens.py --upload (on your own machine, one command, ~1 minute). The bundle is shared, so that one upload fixes CI and local runs together. No credential login was attempted here." ;;
             13) echo "::error title=Garmin sync failed [AUTH-SUPABASE]::FAIL-CLASS: AUTH-SUPABASE — Supabase rejected the sign-in. Check the HT_EMAIL / HT_PASSWORD secrets (app password changed?). This now also blocks the Garmin bundle, which lives behind the same sign-in." ;;
-            15) echo "::error title=Garmin sync failed [TOKEN-WRITEBACK]::FAIL-CLASS: TOKEN-WRITEBACK — the sync itself worked, but Garmin rotated the token bundle and it could not be saved back to the garmin_tokens row, so that rotation is lost. Re-run the workflow; if it repeats, run seed_tokens.py --upload." ;;
-            12) echo "::error title=Garmin sync failed [GARMIN-API]::FAIL-CLASS: GARMIN-API — logged in fine, but a Garmin API call failed (rate limit or Garmin outage). Usually transient: the next daily run retries and dedupe prevents doubles." ;;
-            14) echo "::error title=Garmin sync failed [DATA]::FAIL-CLASS: DATA — auth was fine end to end; one or more activities failed to map or insert. See the uploaded debug log for which dates. The next run retries them." ;;
+            15) echo "::error title=Garmin sync failed [TOKEN-WRITEBACK]::FAIL-CLASS: TOKEN-WRITEBACK — the cycle itself worked, but Garmin rotated the token bundle and it could not be saved back to the garmin_tokens row, so that rotation is lost. Re-run the workflow; if it repeats, run seed_tokens.py --upload." ;;
+            12) echo "::error title=Garmin sync failed [GARMIN-API]::FAIL-CLASS: GARMIN-API — logged in fine, but a Garmin API call failed (rate limit or Garmin outage). Usually transient: the next nightly run retries and dedupe/idempotent re-push prevents doubles." ;;
+            14) echo "::error title=Garmin sync failed [DATA]::FAIL-CLASS: DATA — auth was fine end to end; one or more activities failed to map or insert during import. See the uploaded debug log for which dates. The next run retries them." ;;
             10) echo "::error title=Garmin sync failed [CONFIG]::FAIL-CLASS: CONFIG — a required secret or variable is missing, or deps are not importable. See sync/SETUP.md step 3." ;;
-            *)  echo "::error title=Garmin sync failed [UNKNOWN]::FAIL-CLASS: UNKNOWN — unclassified exit code $code (an unhandled exception in sync/garmin_sync.py). See the uploaded debug log." ;;
+            16) echo "::error title=Garmin sync failed [STAGE-FAILURE]::FAIL-CLASS: STAGE-FAILURE — one or more of the import/advance/push/cleanup stages failed while the others still ran. See the uploaded debug log's STAGE-IMPORT/STAGE-ADVANCE/STAGE-PUSH/STAGE-CLEANUP lines for which stage and why." ;;
+            *)  echo "::error title=Garmin sync failed [UNKNOWN]::FAIL-CLASS: UNKNOWN — unclassified exit code $code (an unhandled exception in sync/nightly_cycle.py). See the uploaded debug log." ;;
           esac
           exit "$code"
 
